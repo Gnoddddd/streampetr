@@ -1,0 +1,7 @@
+Evidence3D custom integration and research code.
+
+This distribution does not bundle StreamPETR, MMDetection3D, nuScenes data, or
+model weights. scripts/clone_streampetr.sh retrieves the official StreamPETR
+repository at a pinned commit. StreamPETR/PETR carries its own Apache-2.0 notice
+and copyright attribution. Users must preserve the licenses and notices of all
+third-party repositories, datasets, weights, and Python packages they install.

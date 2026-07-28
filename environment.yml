@@ -1,0 +1,7 @@
+name: streampetr
+channels:
+  - defaults
+dependencies:
+  - python=3.8
+  - pip
+# Use scripts/install_streampetr_env.sh for CUDA/OpenMMLab wheel installation.

@@ -1,0 +1,26 @@
+ M projects/mmdet3d_plugin/models/utils/attention.py
+ M tools/test.py
+?? mmdetection3d/
+?? projects/mmdet3d_plugin/__pycache__/
+?? projects/mmdet3d_plugin/core/apis/__pycache__/
+?? projects/mmdet3d_plugin/core/bbox/__pycache__/
+?? projects/mmdet3d_plugin/core/bbox/assigners/__pycache__/
+?? projects/mmdet3d_plugin/core/bbox/coders/__pycache__/
+?? projects/mmdet3d_plugin/core/bbox/match_costs/__pycache__/
+?? projects/mmdet3d_plugin/core/evaluation/__pycache__/
+?? projects/mmdet3d_plugin/datasets/__pycache__/
+?? projects/mmdet3d_plugin/datasets/pipelines/__pycache__/
+?? projects/mmdet3d_plugin/datasets/samplers/__pycache__/
+?? projects/mmdet3d_plugin/models/backbones/__pycache__/
+?? projects/mmdet3d_plugin/models/dense_heads/__pycache__/
+?? projects/mmdet3d_plugin/models/detectors/__pycache__/
+?? projects/mmdet3d_plugin/models/necks/__pycache__/
+?? projects/mmdet3d_plugin/models/utils/__pycache__/
+?? projects/mmdet3d_plugin/models/utils/attention.py.before_optional_flash
+?? test/
+?? tools/__pycache__/
+?? tools/data_converter/__pycache__/__init__.cpython-38.pyc
+?? tools/data_converter/__pycache__/nuscenes_converter.cpython-38.pyc
+?? tools/test.py.before_evidence_trace
+?? tools/test.py.before_prediction_output_fix
+?? tools/test.py.before_single_gpu_eval_fix

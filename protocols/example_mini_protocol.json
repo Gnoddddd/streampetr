@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "description": "Wildcard mini diagnostic: persistent rear crash, left frame loss, recovery, and compound blur.",
+  "scenes": {
+    "*": [
+      {
+        "start_frame": 3,
+        "end_frame": 7,
+        "failed_cameras": ["CAM_BACK"],
+        "lost_cameras": [],
+        "dark": {},
+        "fog": {},
+        "motion_blur": {}
+      },
+      {
+        "start_frame": 8,
+        "end_frame": 9,
+        "failed_cameras": [],
+        "lost_cameras": ["CAM_BACK_LEFT"],
+        "dark": {},
+        "fog": {},
+        "motion_blur": {"CAM_FRONT_RIGHT": 0.55}
+      }
+    ]
+  }
+}

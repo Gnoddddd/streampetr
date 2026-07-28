@@ -1,0 +1,76 @@
+# Python caches
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# IDE and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+conda-meta/
+
+# Datasets and downloaded packages
+/data/
+/downloads/
+/cache/
+/datasets_cache/
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.7z
+
+# Training outputs and checkpoints
+/outputs/
+/checkpoints/
+/work_dirs/
+/wandb/
+/tensorboard/
+*.pth
+*.pt
+*.ckpt
+*.onnx
+*.engine
+*.log
+events.out.tfevents.*
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*~
+nohup.out
+
+# Third-party repository managed independently
+/repos/StreamPETR/
+
+# Invalid Git backups
+/.git_invalid_backup_*/
+
+# Generated evaluation results, not source tests
+/test/
+
+# All third-party source repositories
+/repos/
+
+# Local backup and intermediate files
+/.gitignore.backup_*
+*.bak_*
+*.before_*
+*.failed_*
+*.backup_*
+*_backup_*/
+*.orig
+*.rej

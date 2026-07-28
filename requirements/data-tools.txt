@@ -1,0 +1,4 @@
+nuscenes-devkit==1.1.10
+numpy==1.23.5
+matplotlib<3.8
+pyquaternion==0.9.9

@@ -1,0 +1,12 @@
+{
+  "is_false_positive": [false, true, true, false],
+  "supported": [true, false, false, true],
+  "stale_lengths": [3, 5, 2],
+  "evidence_strength": [6.0, 5.4, 4.86, 4.374],
+  "no_new_observation": [false, true, true, true],
+  "correct_after_recovery": [false, false, false, true, true],
+  "recovery_index": 1,
+  "errors": [0.0, 1.0, 0.0, 1.0],
+  "uncertainties": [0.1, 0.9, 0.2, 0.8],
+  "risk_coverage_steps": 5
+}

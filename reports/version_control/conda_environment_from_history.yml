@@ -1,0 +1,6 @@
+name: streampetr
+channels:
+  - defaults
+dependencies:
+  - python=3.8
+prefix: /home/research/miniconda3/envs/streampetr

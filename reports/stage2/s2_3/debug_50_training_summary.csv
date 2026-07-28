@@ -1,0 +1,4 @@
+candidate,iterations,loss_min,loss_max,loss_final,grad_norm_min,grad_norm_max,grad_norm_final,memory_max_mib,residual_abs_max,violation_ratio_max,unsupported_growth_ratio_max,source_mass_violation_ratio_max,scene_reset_events,finite
+n1,50,13.88278,24.33765,16.07059,7.58165,15.69812,14.33372,555,0.0,0.0,0.0,0.0,59,True
+n2,50,14.10927,24.63388,15.89513,7.50957,15.72751,14.26813,555,0.0,0.0,0.0,0.0,59,True
+n3,50,14.18731,24.61301,15.76965,7.50221,15.62931,14.48824,555,0.0,0.0,0.0,0.0,59,True

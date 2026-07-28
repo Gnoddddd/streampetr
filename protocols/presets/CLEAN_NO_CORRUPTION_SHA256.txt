@@ -1,0 +1,1 @@
+8307202fd83ac58146c7165d03dea257bbfb481396d6ec2bf87898f4d7e659f9  protocols/presets/clean_no_corruption.json

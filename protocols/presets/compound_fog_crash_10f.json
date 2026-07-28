@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "scenes": {
+    "*": [
+      {
+        "start_frame": 3,
+        "end_frame": 12,
+        "failed_cameras": [
+          "CAM_BACK"
+        ],
+        "lost_cameras": [],
+        "dark": {},
+        "fog": {
+          "CAM_FRONT": 0.55,
+          "CAM_FRONT_RIGHT": 0.55
+        },
+        "motion_blur": {}
+      }
+    ]
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "scenes": {
+    "*": [
+      {
+        "start_frame": 3,
+        "end_frame": 3,
+        "failed_cameras": [],
+        "lost_cameras": [
+          "CAM_BACK"
+        ],
+        "dark": {},
+        "fog": {},
+        "motion_blur": {}
+      },
+      {
+        "start_frame": 20,
+        "end_frame": 20,
+        "failed_cameras": [],
+        "lost_cameras": [
+          "CAM_BACK"
+        ],
+        "dark": {},
+        "fog": {},
+        "motion_blur": {}
+      },
+      {
+        "start_frame": 35,
+        "end_frame": 35,
+        "failed_cameras": [],
+        "lost_cameras": [
+          "CAM_BACK"
+        ],
+        "dark": {},
+        "fog": {},
+        "motion_blur": {}
+      }
+    ]
+  }
+}

@@ -1,0 +1,117 @@
+{
+  "version": 1,
+  "scenes": {
+    "*": [
+      {
+        "start_frame": 3,
+        "end_frame": 3,
+        "failed_cameras": [],
+        "lost_cameras": [
+          "CAM_BACK"
+        ],
+        "dark": {},
+        "fog": {},
+        "motion_blur": {}
+      },
+      {
+        "start_frame": 6,
+        "end_frame": 6,
+        "failed_cameras": [],
+        "lost_cameras": [
+          "CAM_BACK"
+        ],
+        "dark": {},
+        "fog": {},
+        "motion_blur": {}
+      },
+      {
+        "start_frame": 11,
+        "end_frame": 11,
+        "failed_cameras": [],
+        "lost_cameras": [
+          "CAM_BACK"
+        ],
+        "dark": {},
+        "fog": {},
+        "motion_blur": {}
+      },
+      {
+        "start_frame": 15,
+        "end_frame": 15,
+        "failed_cameras": [],
+        "lost_cameras": [
+          "CAM_BACK"
+        ],
+        "dark": {},
+        "fog": {},
+        "motion_blur": {}
+      },
+      {
+        "start_frame": 20,
+        "end_frame": 20,
+        "failed_cameras": [],
+        "lost_cameras": [
+          "CAM_BACK"
+        ],
+        "dark": {},
+        "fog": {},
+        "motion_blur": {}
+      },
+      {
+        "start_frame": 23,
+        "end_frame": 23,
+        "failed_cameras": [],
+        "lost_cameras": [
+          "CAM_BACK"
+        ],
+        "dark": {},
+        "fog": {},
+        "motion_blur": {}
+      },
+      {
+        "start_frame": 28,
+        "end_frame": 28,
+        "failed_cameras": [],
+        "lost_cameras": [
+          "CAM_BACK"
+        ],
+        "dark": {},
+        "fog": {},
+        "motion_blur": {}
+      },
+      {
+        "start_frame": 31,
+        "end_frame": 31,
+        "failed_cameras": [],
+        "lost_cameras": [
+          "CAM_BACK"
+        ],
+        "dark": {},
+        "fog": {},
+        "motion_blur": {}
+      },
+      {
+        "start_frame": 33,
+        "end_frame": 33,
+        "failed_cameras": [],
+        "lost_cameras": [
+          "CAM_BACK"
+        ],
+        "dark": {},
+        "fog": {},
+        "motion_blur": {}
+      },
+      {
+        "start_frame": 35,
+        "end_frame": 35,
+        "failed_cameras": [],
+        "lost_cameras": [
+          "CAM_BACK"
+        ],
+        "dark": {},
+        "fog": {},
+        "motion_blur": {}
+      }
+    ]
+  }
+}

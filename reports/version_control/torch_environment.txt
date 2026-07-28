@@ -1,0 +1,5 @@
+torch: 1.9.0+cu111
+torch cuda build: 11.1
+cuda available: True
+gpu count: 1
+gpu: NVIDIA GeForce RTX 3080 Ti Laptop GPU

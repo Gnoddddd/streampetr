@@ -1,0 +1,18 @@
+{
+  "project": "Evidence3D",
+  "version": "0.1.0-mini",
+  "generated_date": "2026-07-13",
+  "target_platform": "WSL2 Ubuntu 22.04",
+  "target_python": "3.8",
+  "stream_petr_repository": "exiawsh/StreamPETR",
+  "stream_petr_commit": "95f64702306ccdb7a78889578b2a55b5deb35b2a",
+  "mmdetection3d_version": "v1.0.0rc6",
+  "validation": {
+    "pytest": "24 passed",
+    "python38_ast_files": 51,
+    "json_files": 18,
+    "shell_scripts": 9,
+    "compileall": "passed",
+    "real_gpu_training_in_delivery_container": false
+  }
+}
