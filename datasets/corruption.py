@@ -136,6 +136,12 @@ class ApplyPartialObservation:
         self.fog_prob = float(fog_prob)
         self.motion_blur_prob = float(motion_blur_prob)
         self.max_severity = float(max_severity)
+        if curriculum_cfg is None:
+            encoded_curriculum = os.environ.get(
+                "EVIDENCE3D_REACQUISITION_CURRICULUM_JSON"
+            )
+            if encoded_curriculum:
+                curriculum_cfg = json.loads(encoded_curriculum)
         self.curriculum_cfg: Optional[Dict] = None
         if curriculum_cfg is not None:
             self.configure_curriculum(curriculum_cfg)

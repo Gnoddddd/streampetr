@@ -1,0 +1,6 @@
+stage,candidate,w2_t100_cases,w2_t100_mean,w2_t100_max,unrecovered
+zero_shot,B0,6,7.833333,14,0
+zero_shot,B4,6,7.833333,14,0
+zero_shot,B6,6,6.500000,10,0
+debug50,B4,6,5.666667,8,0
+debug50,B6,6,7.166667,11,0

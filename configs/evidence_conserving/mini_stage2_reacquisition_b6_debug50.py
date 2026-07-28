@@ -1,5 +1,8 @@
 """Fifty-iteration rescue run for zero-shot-qualified B6."""
 
+import json
+import os
+
 _base_ = "./mini_stage2_reacquisition_b6.py"
 
 work_dir = "outputs/stage2/s2_3_rescue/debug_50/b6"
@@ -21,13 +24,11 @@ reacquisition_curriculum = dict(
     durations=(1, 3, 5, 10, 20),
     cycle_frames=40,
 )
+os.environ["EVIDENCE3D_REACQUISITION_CURRICULUM_JSON"] = json.dumps(
+    reacquisition_curriculum
+)
 
 custom_hooks = [
-    dict(
-        type="ReacquisitionCurriculumHook",
-        curriculum_cfg=reacquisition_curriculum,
-        priority="VERY_HIGH",
-    ),
     dict(
         type="EvidenceTraceHook",
         interval=1,

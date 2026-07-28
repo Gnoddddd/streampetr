@@ -52,6 +52,10 @@ def main():
             "bonus": 0,
             "violation": 0,
             "unsupported": 0,
+            "keep": 0,
+            "recover": 0,
+            "defer": 0,
+            "write": 0,
         }
         records = 0
         with path.open(encoding="utf-8") as handle:
@@ -75,6 +79,13 @@ def main():
                     _flat(
                         diagnostics.get("unsupported_growth", [])
                     ).astype(bool).sum()
+                )
+                action = _flat(diagnostics.get("action", []))
+                counts["keep"] += int((action == 0).sum())
+                counts["recover"] += int((action == 1).sum())
+                counts["defer"] += int((action == 2).sum())
+                counts["write"] += int(
+                    _flat(diagnostics.get("write_mask", [])).astype(bool).sum()
                 )
                 for field in FIELDS:
                     values[field].extend(
@@ -100,11 +111,20 @@ def main():
             detection[metric] = (
                 float(matches[-1]) if matches else math.nan
             )
+        candidate = next(
+            (
+                parent.name
+                for parent in path.parents
+                if re.fullmatch(r"b[0-6]", parent.name)
+            ),
+            "unknown",
+        )
+        protocol = path.parents[1].name
         row = {
-            "candidate": path.parents[2].name,
-            "protocol": path.parents[1].name,
+            "candidate": candidate,
+            "protocol": protocol,
             "experiment": (
-                path.parents[2].name + "_" + path.parents[1].name
+                candidate + "_" + protocol
             ),
             **detection,
             "records": records,
@@ -136,6 +156,11 @@ def main():
             "violation_ratio": counts["violation"] / queries,
             "unsupported_growth_count": counts["unsupported"],
             "unsupported_growth_ratio": counts["unsupported"] / queries,
+            "keep_count": counts["keep"],
+            "recover_count": counts["recover"],
+            "defer_count": counts["defer"],
+            "write_count": counts["write"],
+            "write_ratio": counts["write"] / queries,
         }
         rows.append(row)
     args.output.parent.mkdir(parents=True, exist_ok=True)

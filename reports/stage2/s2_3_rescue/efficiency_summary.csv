@@ -1,0 +1,4 @@
+candidate,clean_eval_fps,clean_eval_elapsed_s,train_peak_memory_mib,train_iter_time_s,checkpoint_mib
+B0,8.4,10,not_applicable,not_applicable,153
+B4,7.3,11,555,0.20,153
+B6,7.3,11,555,0.20,153
