@@ -73,6 +73,7 @@ class EvidenceConservingStreamPETRHead(StreamPETRHead):
         innovation_cfg: Optional[Dict] = None,
         innovation_warmup_iters: int = 0,
         innovation_transition_iters: int = 0,
+        reacquisition_warmup_iters: int = 10,
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -143,6 +144,14 @@ class EvidenceConservingStreamPETRHead(StreamPETRHead):
         # evidence gating from zero.
         self.register_buffer(
             "evidence_step", torch.zeros((), dtype=torch.long), persistent=True
+        )
+        self.reacquisition_warmup_iters = max(
+            int(reacquisition_warmup_iters), 0
+        )
+        self.register_buffer(
+            "reacquisition_training_step",
+            torch.zeros((), dtype=torch.long),
+            persistent=False,
         )
         self._last_evidence_summary: Dict[str, float] = {}
         self._last_evidence_diagnostics: Dict[str, Any] = {}
@@ -270,6 +279,28 @@ class EvidenceConservingStreamPETRHead(StreamPETRHead):
         num_queries = rec_cls.shape[1]
         num_base_queries = min(self.num_query, num_queries)
         num_propagated = min(self.num_propagated, max(num_queries - num_base_queries, 0))
+        query_delta_time = rec_observability.new_zeros(
+            rec_observability.shape
+        )
+        if num_propagated > 0 and self.memory_timestamp.numel() > 0:
+            available = min(
+                num_propagated, self.memory_timestamp.shape[1]
+            )
+            query_delta_time[
+                :, num_base_queries : num_base_queries + available
+            ] = self.memory_timestamp[:, :available, 0].to(
+                rec_observability.dtype
+            ).abs()
+        if self.training and self.reacquisition_warmup_iters > 0:
+            restoration_scale = min(
+                (
+                    int(self.reacquisition_training_step.item()) + 1
+                )
+                / self.reacquisition_warmup_iters,
+                1.0,
+            )
+        else:
+            restoration_scale = 1.0
         query_state = self.evidence_ledger.update_queries(
             rec_ternary,
             rec_observability,
@@ -286,7 +317,11 @@ class EvidenceConservingStreamPETRHead(StreamPETRHead):
             source_quality=rec_source_quality,
             camera_coverage=rec_camera_coverage,
             innovation_step=int(self.evidence_step.item()),
+            delta_time=query_delta_time,
+            restoration_scale=restoration_scale,
         )
+        if self.training:
+            self.reacquisition_training_step.add_(1)
 
         bootstrap_eps = float(
             self.evidence_ledger.temporal_update.eps
@@ -367,6 +402,26 @@ class EvidenceConservingStreamPETRHead(StreamPETRHead):
             "negative_visibility_gate",
             "strength_saturation",
             "innovation_transition",
+            "base_positive_evidence",
+            "base_negative_evidence",
+            "lost_strength",
+            "age_factor",
+            "current_reliability",
+            "predicted_center",
+            "reacquisition_center_residual",
+            "motion_consistency",
+            "source_recovery",
+            "reacquisition_gate",
+            "restoration_budget",
+            "restoration_bonus",
+            "is_reacquired",
+            "pre_gap_strength",
+            "pre_gap_presence",
+            "pre_gap_uncertainty",
+            "pre_gap_source_evidence",
+            "gap_active",
+            "gap_age",
+            "reacquisition_consumed",
         )
         self._last_evidence_diagnostics = {
             key: query_state[key].detach().cpu()

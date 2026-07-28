@@ -55,6 +55,8 @@ class EvidenceConservingTemporalUpdate(nn.Module):
         effective_count: Optional[Tensor] = None,
         positive_evidence_factor: Optional[Tensor] = None,
         negative_evidence_factor: Optional[Tensor] = None,
+        positive_evidence_override: Optional[Tensor] = None,
+        negative_evidence_override: Optional[Tensor] = None,
     ) -> Dict[str, Tensor]:
         output_dtype = prior_alpha.dtype
         half_compute = output_dtype == torch.float16
@@ -74,6 +76,10 @@ class EvidenceConservingTemporalUpdate(nn.Module):
                 positive_evidence_factor = positive_evidence_factor.float()
             if negative_evidence_factor is not None:
                 negative_evidence_factor = negative_evidence_factor.float()
+            if positive_evidence_override is not None:
+                positive_evidence_override = positive_evidence_override.float()
+            if negative_evidence_override is not None:
+                negative_evidence_override = negative_evidence_override.float()
 
         prior_alpha = prior_alpha.clamp_min(1.0)
         prior_beta = prior_beta.clamp_min(1.0)
@@ -130,6 +136,10 @@ class EvidenceConservingTemporalUpdate(nn.Module):
         negative_evidence = (
             self.evidence_scale * negative_gate * negative_probability
         )
+        if positive_evidence_override is not None:
+            positive_evidence = positive_evidence_override.clamp_min(0.0)
+        if negative_evidence_override is not None:
+            negative_evidence = negative_evidence_override.clamp_min(0.0)
 
         alpha = 1.0 + self.gamma * (prior_alpha - 1.0) + positive_evidence
         beta = 1.0 + self.gamma * (prior_beta - 1.0) + negative_evidence

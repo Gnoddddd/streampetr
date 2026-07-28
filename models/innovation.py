@@ -49,10 +49,16 @@ class ReliabilityCalibratedInnovation(nn.Module):
     """
 
     MODES = ("off", "track", "active")
+    ACTIVE_STRATEGIES = (
+        "legacy_multiplicative",
+        "residual_preserving",
+        "budgeted_reacquisition",
+    )
 
     def __init__(
         self,
         mode: str = "off",
+        innovation_active_strategy: str = "legacy_multiplicative",
         source_weight: float = 0.25,
         feature_weight: float = 0.25,
         geometry_weight: float = 0.20,
@@ -79,12 +85,28 @@ class ReliabilityCalibratedInnovation(nn.Module):
         enable_strength_saturation: bool = False,
         strength_temperature: float = 10.0,
         eps: float = 1e-6,
+        restore_ratio: float = 0.5,
+        max_relative_bonus: float = 0.08,
+        max_absolute_bonus: float = 0.04654390,
+        minimum_gap_age: int = 2,
+        reacquisition_time_tau: float = 3.0,
+        use_motion_gate: bool = True,
+        use_source_recovery_gate: bool = True,
+        motion_sigma: float = 5.0,
+        residual_preserving_mix: float = 0.05,
     ) -> None:
         super().__init__()
         mode = str(mode).lower()
         if mode not in self.MODES:
             raise ValueError("innovation mode must be off, track, or active")
         self.mode = mode
+        strategy = str(innovation_active_strategy).lower()
+        if strategy not in self.ACTIVE_STRATEGIES:
+            raise ValueError(
+                "innovation_active_strategy must be legacy_multiplicative, "
+                "residual_preserving, or budgeted_reacquisition"
+            )
+        self.active_strategy = strategy
         self.weights = {
             "source_innovation": float(source_weight),
             "feature_innovation": float(feature_weight),
@@ -125,10 +147,29 @@ class ReliabilityCalibratedInnovation(nn.Module):
         self.enable_strength_saturation = bool(enable_strength_saturation)
         self.strength_temperature = float(strength_temperature)
         self.eps = float(eps)
+        self.restore_ratio = float(restore_ratio)
+        self.max_relative_bonus = float(max_relative_bonus)
+        self.max_absolute_bonus = float(max_absolute_bonus)
+        self.minimum_gap_age = max(int(minimum_gap_age), 1)
+        self.reacquisition_time_tau = float(reacquisition_time_tau)
+        self.use_motion_gate = bool(use_motion_gate)
+        self.use_source_recovery_gate = bool(use_source_recovery_gate)
+        self.motion_sigma = float(motion_sigma)
+        self.residual_preserving_mix = float(residual_preserving_mix)
         if not 0.0 <= self.novelty_floor <= 1.0:
             raise ValueError("novelty_floor must be in [0, 1]")
         if self.tau_reacquisition <= 0.0 or self.strength_temperature <= 0.0:
             raise ValueError("innovation temperatures must be positive")
+        if (
+            self.restore_ratio < 0.0
+            or self.max_relative_bonus < 0.0
+            or self.max_absolute_bonus < 0.0
+        ):
+            raise ValueError("reacquisition budgets must be non-negative")
+        if self.reacquisition_time_tau <= 0.0 or self.motion_sigma <= 0.0:
+            raise ValueError("reacquisition time tau and motion sigma must be positive")
+        if not 0.0 <= self.residual_preserving_mix <= 1.0:
+            raise ValueError("residual_preserving_mix must be in [0, 1]")
 
     def _cosine_innovation(
         self, current: Tensor, previous: Tensor, half_scale: bool

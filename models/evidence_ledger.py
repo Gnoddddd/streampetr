@@ -41,6 +41,13 @@ class EvidenceLedger(nn.Module):
         "reference_class_distribution",
         "reference_ternary_distribution",
         "reference_valid",
+        "pre_gap_strength",
+        "pre_gap_presence",
+        "pre_gap_uncertainty",
+        "pre_gap_source_evidence",
+        "gap_active",
+        "gap_age",
+        "reacquisition_consumed",
     )
 
     def __init__(
@@ -139,7 +146,7 @@ class EvidenceLedger(nn.Module):
                 value = value.detach().clone()
                 buffers[name] = value.cpu() if to_cpu else value
         return {
-            "version": 3,
+            "version": 4,
             "memory_len": self.memory_len,
             "num_cameras": self.num_cameras,
             "feature_dim": self.feature_dim,
@@ -156,7 +163,7 @@ class EvidenceLedger(nn.Module):
     ) -> None:
         """Restore state only when explicitly requested and shape-compatible."""
         version = int(state.get("version", -1))
-        if version not in (1, 2, 3):
+        if version not in (1, 2, 3, 4):
             raise ValueError("Unsupported evidence runtime-state version")
         if int(state.get("memory_len", -1)) != self.memory_len:
             raise ValueError("runtime memory_len does not match this ledger")
@@ -211,11 +218,29 @@ class EvidenceLedger(nn.Module):
                     device=alpha.device,
                     dtype=torch.bool,
                 )
-        if version == 3:
+        if version in (3, 4):
             if int(state.get("feature_dim", -1)) != self.feature_dim:
                 raise ValueError("runtime feature_dim does not match this ledger")
             if int(state.get("class_dim", -1)) != self.class_dim:
                 raise ValueError("runtime class_dim does not match this ledger")
+        if version in (1, 2, 3):
+            buffers = dict(buffers)
+            alpha = buffers.get("alpha")
+            for name in (
+                "pre_gap_strength",
+                "pre_gap_presence",
+                "pre_gap_uncertainty",
+                "gap_active",
+                "gap_age",
+                "reacquisition_consumed",
+            ):
+                buffers[name] = (
+                    None if alpha is None else torch.zeros_like(alpha)
+                )
+            source = buffers.get("source_evidence")
+            buffers["pre_gap_source_evidence"] = (
+                None if source is None else torch.zeros_like(source)
+            )
         missing = set(self._STATE_NAMES) - set(buffers)
         if missing:
             raise ValueError(f"runtime state is missing buffers: {sorted(missing)}")
@@ -269,6 +294,17 @@ class EvidenceLedger(nn.Module):
                 3,
             ),
             "reference_valid": (batch_size, state_len),
+            "pre_gap_strength": (batch_size, state_len),
+            "pre_gap_presence": (batch_size, state_len),
+            "pre_gap_uncertainty": (batch_size, state_len),
+            "pre_gap_source_evidence": (
+                batch_size,
+                state_len,
+                self.num_cameras,
+            ),
+            "gap_active": (batch_size, state_len),
+            "gap_age": (batch_size, state_len),
+            "reacquisition_consumed": (batch_size, state_len),
         }
         target_device = torch.device(device) if device is not None else alpha.device
         for name, expected_shape in expected_shapes.items():
@@ -279,7 +315,11 @@ class EvidenceLedger(nn.Module):
                 )
             if name == "action":
                 restored = value.to(device=target_device, dtype=torch.long)
-            elif name == "reference_valid":
+            elif name in (
+                "reference_valid",
+                "gap_active",
+                "reacquisition_consumed",
+            ):
                 restored = value.to(device=target_device, dtype=torch.bool)
             else:
                 target_dtype = dtype if dtype is not None else value.dtype
@@ -348,6 +388,15 @@ class EvidenceLedger(nn.Module):
             self.memory_len,
             device=device,
             dtype=torch.bool,
+        )
+        self.pre_gap_strength = torch.zeros_like(self.alpha)
+        self.pre_gap_presence = torch.zeros_like(self.alpha)
+        self.pre_gap_uncertainty = torch.zeros_like(self.alpha)
+        self.pre_gap_source_evidence = torch.zeros_like(self.source_evidence)
+        self.gap_active = torch.zeros_like(self.alpha, dtype=torch.bool)
+        self.gap_age = torch.zeros_like(self.alpha)
+        self.reacquisition_consumed = torch.zeros_like(
+            self.alpha, dtype=torch.bool
         )
 
     def pre_update(
@@ -418,6 +467,17 @@ class EvidenceLedger(nn.Module):
             :, : self.memory_len
         ]
         self.reference_valid = self.reference_valid[:, : self.memory_len]
+        self.pre_gap_strength = self.pre_gap_strength[:, : self.memory_len]
+        self.pre_gap_presence = self.pre_gap_presence[:, : self.memory_len]
+        self.pre_gap_uncertainty = self.pre_gap_uncertainty[:, : self.memory_len]
+        self.pre_gap_source_evidence = self.pre_gap_source_evidence[
+            :, : self.memory_len
+        ]
+        self.gap_active = self.gap_active[:, : self.memory_len]
+        self.gap_age = self.gap_age[:, : self.memory_len]
+        self.reacquisition_consumed = self.reacquisition_consumed[
+            :, : self.memory_len
+        ]
 
         keep = effective_prev_exists.to(self.alpha.dtype).view(batch_size, 1)
         self.alpha = 1.0 + (self.alpha - 1.0) * keep
@@ -443,6 +503,17 @@ class EvidenceLedger(nn.Module):
             self.reference_ternary_distribution * keep.unsqueeze(-1)
         )
         self.reference_valid = self.reference_valid & keep.bool()
+        self.pre_gap_strength = self.pre_gap_strength * keep
+        self.pre_gap_presence = self.pre_gap_presence * keep
+        self.pre_gap_uncertainty = self.pre_gap_uncertainty * keep
+        self.pre_gap_source_evidence = (
+            self.pre_gap_source_evidence * keep.unsqueeze(-1)
+        )
+        self.gap_active = self.gap_active & keep.bool()
+        self.gap_age = self.gap_age * keep
+        self.reacquisition_consumed = (
+            self.reacquisition_consumed & keep.bool()
+        )
         self._scene_tokens = normalized_tokens
 
     def transform_reference_geometry(self, transform: Tensor) -> None:
@@ -542,6 +613,13 @@ class EvidenceLedger(nn.Module):
         reference_valid = torch.zeros(
             batch_size, num_queries, device=device, dtype=torch.bool
         )
+        pre_gap_strength = torch.zeros_like(alpha)
+        pre_gap_presence = torch.zeros_like(alpha)
+        pre_gap_uncertainty = torch.zeros_like(alpha)
+        pre_gap_source_evidence = torch.zeros_like(provenance)
+        gap_active = torch.zeros_like(alpha, dtype=torch.bool)
+        gap_age = torch.zeros_like(alpha)
+        reacquisition_consumed = torch.zeros_like(alpha, dtype=torch.bool)
 
         if self.alpha is None or num_propagated <= 0:
             return {
@@ -556,6 +634,13 @@ class EvidenceLedger(nn.Module):
                 "reference_class_distribution": reference_class_distribution,
                 "reference_ternary_distribution": reference_ternary_distribution,
                 "reference_valid": reference_valid,
+                "pre_gap_strength": pre_gap_strength,
+                "pre_gap_presence": pre_gap_presence,
+                "pre_gap_uncertainty": pre_gap_uncertainty,
+                "pre_gap_source_evidence": pre_gap_source_evidence,
+                "gap_active": gap_active,
+                "gap_age": gap_age,
+                "reacquisition_consumed": reacquisition_consumed,
             }
 
         start = min(num_base_queries, num_queries)
@@ -590,6 +675,23 @@ class EvidenceLedger(nn.Module):
             reference_valid[:, start : start + count] = self.reference_valid[
                 :, :count
             ]
+            pre_gap_strength[:, start : start + count] = self.pre_gap_strength[
+                :, :count
+            ].to(dtype)
+            pre_gap_presence[:, start : start + count] = self.pre_gap_presence[
+                :, :count
+            ].to(dtype)
+            pre_gap_uncertainty[:, start : start + count] = self.pre_gap_uncertainty[
+                :, :count
+            ].to(dtype)
+            pre_gap_source_evidence[
+                :, start : start + count
+            ] = self.pre_gap_source_evidence[:, :count].to(dtype)
+            gap_active[:, start : start + count] = self.gap_active[:, :count]
+            gap_age[:, start : start + count] = self.gap_age[:, :count].to(dtype)
+            reacquisition_consumed[
+                :, start : start + count
+            ] = self.reacquisition_consumed[:, :count]
         return {
             "alpha": alpha,
             "beta": beta,
@@ -602,6 +704,13 @@ class EvidenceLedger(nn.Module):
             "reference_class_distribution": reference_class_distribution,
             "reference_ternary_distribution": reference_ternary_distribution,
             "reference_valid": reference_valid,
+            "pre_gap_strength": pre_gap_strength,
+            "pre_gap_presence": pre_gap_presence,
+            "pre_gap_uncertainty": pre_gap_uncertainty,
+            "pre_gap_source_evidence": pre_gap_source_evidence,
+            "gap_active": gap_active,
+            "gap_age": gap_age,
+            "reacquisition_consumed": reacquisition_consumed,
         }
 
     def _update_source_ledger(
@@ -716,6 +825,8 @@ class EvidenceLedger(nn.Module):
         source_quality: Optional[Tensor] = None,
         camera_coverage: Optional[Tensor] = None,
         innovation_step: Optional[int] = None,
+        delta_time: Optional[Tensor] = None,
+        restoration_scale: float = 1.0,
     ) -> Dict[str, Tensor]:
         batch_size, num_queries, _ = ternary_probabilities.shape
         priors = self._query_priors(
@@ -817,6 +928,15 @@ class EvidenceLedger(nn.Module):
             previous_presence = (
                 priors["alpha"] / previous_total.clamp_min(self.novelty_eps)
             )
+        base_update = self.temporal_update(
+            priors["alpha"],
+            priors["beta"],
+            ternary_probabilities[..., 0],
+            ternary_probabilities[..., 1],
+            observability,
+            novelty,
+            effective_count,
+        )
         innovation_state: Dict[str, Tensor] = {}
         positive_factor = None
         negative_factor = None
@@ -894,16 +1014,284 @@ class EvidenceLedger(nn.Module):
                 innovation_state["innovation_transition"] = (
                     observability.new_full(observability.shape, transition)
                 )
-        update = self.temporal_update(
-            priors["alpha"],
-            priors["beta"],
-            ternary_probabilities[..., 0],
-            ternary_probabilities[..., 1],
-            observability,
-            novelty,
-            effective_count,
-            positive_evidence_factor=positive_factor,
-            negative_evidence_factor=negative_factor,
+        update = base_update
+        strategy = self.innovation.active_strategy
+        if self.innovation.mode == "active" and strategy == "legacy_multiplicative":
+            update = self.temporal_update(
+                priors["alpha"],
+                priors["beta"],
+                ternary_probabilities[..., 0],
+                ternary_probabilities[..., 1],
+                observability,
+                novelty,
+                effective_count,
+                positive_evidence_factor=positive_factor,
+                negative_evidence_factor=negative_factor,
+            )
+        elif (
+            self.innovation.mode == "active"
+            and strategy == "residual_preserving"
+        ):
+            candidate = self.temporal_update(
+                priors["alpha"],
+                priors["beta"],
+                ternary_probabilities[..., 0],
+                ternary_probabilities[..., 1],
+                observability,
+                novelty,
+                effective_count,
+                positive_evidence_factor=positive_factor,
+                negative_evidence_factor=negative_factor,
+            )
+            mix = self.innovation.residual_preserving_mix
+            positive = (
+                (1.0 - mix)
+                * base_update["actual_added_positive_evidence"]
+                + mix * candidate["actual_added_positive_evidence"]
+            )
+            update = self.temporal_update(
+                priors["alpha"],
+                priors["beta"],
+                ternary_probabilities[..., 0],
+                ternary_probabilities[..., 1],
+                observability,
+                novelty,
+                effective_count,
+                positive_evidence_override=positive,
+                negative_evidence_override=base_update[
+                    "actual_added_negative_evidence"
+                ],
+            )
+            innovation_state["candidate_positive_evidence"] = candidate[
+                "actual_added_positive_evidence"
+            ]
+
+        prior_strength = previous_total - 2.0
+        cpu_half = (
+            previous_total.device.type == "cpu"
+            and previous_total.dtype == torch.float16
+        )
+        if cpu_half:
+            prior_uncertainty = (
+                2.0 / previous_total.float().clamp_min(self.novelty_eps)
+            ).to(previous_total.dtype)
+        else:
+            prior_uncertainty = (
+                2.0 / previous_total.clamp_min(self.novelty_eps)
+            )
+        start_gap = has_prior & (~priors["gap_active"]) & (~reliable_observation)
+        first_recovery = (
+            has_prior
+            & priors["gap_active"]
+            & (~priors["reacquisition_consumed"])
+            & reliable_observation
+        )
+        stable_recovery = (
+            has_prior
+            & priors["gap_active"]
+            & priors["reacquisition_consumed"]
+            & reliable_observation
+        )
+        continuing_gap = priors["gap_active"] & (~reliable_observation)
+
+        pre_gap_strength = torch.where(
+            start_gap, prior_strength, priors["pre_gap_strength"]
+        )
+        pre_gap_presence = torch.where(
+            start_gap, previous_presence, priors["pre_gap_presence"]
+        )
+        pre_gap_uncertainty = torch.where(
+            start_gap, prior_uncertainty, priors["pre_gap_uncertainty"]
+        )
+        pre_gap_source_evidence = torch.where(
+            start_gap.unsqueeze(-1),
+            priors["source_evidence"],
+            priors["pre_gap_source_evidence"],
+        )
+        gap_age = torch.where(
+            start_gap,
+            torch.ones_like(priors["gap_age"]),
+            torch.where(
+                continuing_gap,
+                priors["gap_age"] + 1.0,
+                priors["gap_age"],
+            ),
+        )
+        gap_active = priors["gap_active"] | start_gap
+        reacquisition_consumed = (
+            priors["reacquisition_consumed"] | first_recovery
+        )
+        gap_active = gap_active & (~stable_recovery)
+        gap_age = torch.where(
+            stable_recovery, torch.zeros_like(gap_age), gap_age
+        )
+        reacquisition_consumed = (
+            reacquisition_consumed & (~stable_recovery)
+        )
+        pre_gap_strength = torch.where(
+            stable_recovery, update["strength"], pre_gap_strength
+        )
+        pre_gap_presence = torch.where(
+            stable_recovery,
+            update["existence_probability"],
+            pre_gap_presence,
+        )
+        pre_gap_uncertainty = torch.where(
+            stable_recovery, update["uncertainty"], pre_gap_uncertainty
+        )
+
+        lost_strength = (
+            pre_gap_strength.float() - prior_strength.float()
+        ).clamp_min(0.0)
+        age_numerator = (
+            gap_age.float()
+            - float(self.innovation.minimum_gap_age)
+            + 1.0
+        ).clamp_min(0.0)
+        age_factor = 1.0 - torch.exp(
+            -age_numerator / self.innovation.reacquisition_time_tau
+        )
+        p_unobserved = ternary_probabilities[..., 2].float().clamp(0.0, 1.0)
+        current_reliability = (
+            reliable_observation.float()
+            * observability.float().clamp(0.0, 1.0)
+            * source_quality.float().clamp(0.0, 1.0)
+            * (1.0 - p_unobserved)
+        )
+        if delta_time is None:
+            delta_time = torch.zeros_like(observability)
+        else:
+            delta_time = delta_time.to(
+                device=observability.device, dtype=observability.dtype
+            )
+            if delta_time.shape != observability.shape:
+                raise ValueError("delta_time must share [B,Q] query layout")
+        previous_geometry_float = priors["reference_geometry"].float()
+        predicted_center = (
+            previous_geometry_float[..., :3]
+            + torch.cat(
+                (
+                    previous_geometry_float[..., 4:6],
+                    torch.zeros_like(
+                        previous_geometry_float[..., 4:5]
+                    ),
+                ),
+                dim=-1,
+            )
+            * delta_time.float().abs().unsqueeze(-1)
+        )
+        reacquisition_center_residual = torch.linalg.vector_norm(
+            current_geometry.float()[..., :3] - predicted_center, dim=-1
+        )
+        motion_consistency = torch.exp(
+            -reacquisition_center_residual.square()
+            / (2.0 * self.innovation.motion_sigma ** 2)
+        )
+        motion_consistency = torch.where(
+            valid_geometry,
+            motion_consistency,
+            torch.zeros_like(motion_consistency),
+        )
+        if not self.innovation.use_motion_gate:
+            motion_consistency = torch.ones_like(motion_consistency)
+
+        current_source_for_recovery = (
+            source_vector
+            if raw_source_vector is None
+            else raw_source_vector
+        ).float().clamp_min(0.0)
+        anchor_source = pre_gap_source_evidence.float().clamp_min(0.0)
+        current_source_norm = torch.linalg.vector_norm(
+            current_source_for_recovery.float(), dim=-1
+        )
+        anchor_source_norm = torch.linalg.vector_norm(
+            anchor_source.float(), dim=-1
+        )
+        source_recovery = (
+            (
+                current_source_for_recovery.float()
+                * anchor_source.float()
+            ).sum(-1)
+            / (
+                current_source_norm * anchor_source_norm
+            ).clamp_min(self.novelty_eps)
+        ).clamp(0.0, 1.0)
+        source_recovery = torch.where(
+            (current_source_norm > self.novelty_eps)
+            & (anchor_source_norm > self.novelty_eps),
+            source_recovery,
+            torch.zeros_like(source_recovery),
+        )
+        if not self.innovation.use_source_recovery_gate:
+            source_recovery = torch.ones_like(source_recovery)
+
+        reacquisition_gate = (
+            first_recovery.float()
+            * current_reliability
+            * motion_consistency
+            * source_recovery
+            * pre_gap_presence.float().clamp(0.0, 1.0)
+            * age_factor
+        )
+        base_positive = base_update["actual_added_positive_evidence"]
+        base_negative = base_update["actual_added_negative_evidence"]
+        restoration_budget = torch.minimum(
+            self.innovation.restore_ratio * lost_strength,
+            self.innovation.max_relative_bonus * base_positive.float(),
+        )
+        restoration_budget = torch.minimum(
+            restoration_budget,
+            torch.full_like(
+                restoration_budget, self.innovation.max_absolute_bonus
+            ),
+        )
+        restoration_bonus = (
+            restoration_budget
+            * reacquisition_gate
+            * float(max(0.0, min(restoration_scale, 1.0)))
+        )
+        if (
+            self.innovation.mode == "active"
+            and strategy == "budgeted_reacquisition"
+        ):
+            update = self.temporal_update(
+                priors["alpha"],
+                priors["beta"],
+                ternary_probabilities[..., 0],
+                ternary_probabilities[..., 1],
+                observability,
+                novelty,
+                effective_count,
+                positive_evidence_override=base_positive + restoration_bonus,
+                negative_evidence_override=base_negative,
+            )
+        else:
+            restoration_bonus = torch.zeros_like(restoration_bonus)
+
+        numerical_state = {
+            "lost_strength": lost_strength,
+            "age_factor": age_factor,
+            "current_reliability": current_reliability,
+            "predicted_center": predicted_center,
+            "reacquisition_center_residual": reacquisition_center_residual,
+            "motion_consistency": motion_consistency,
+            "source_recovery": source_recovery,
+            "reacquisition_gate": reacquisition_gate,
+            "restoration_budget": restoration_budget,
+            "restoration_bonus": restoration_bonus,
+        }
+        if reference_dtype == torch.float16:
+            numerical_state = {
+                key: value.to(reference_dtype)
+                for key, value in numerical_state.items()
+            }
+        innovation_state.update(
+            {
+                "base_positive_evidence": base_positive,
+                "base_negative_evidence": base_negative,
+                **numerical_state,
+                "is_reacquired": first_recovery,
+            }
         )
         source_state: Dict[str, Tensor] = {}
         if self.enable_source_ledger:
@@ -957,6 +1345,13 @@ class EvidenceLedger(nn.Module):
             "reference_class_distribution": current_class_probability.detach(),
             "reference_ternary_distribution": ternary_probabilities.detach(),
             "reference_valid": current_reference_valid,
+            "pre_gap_strength": pre_gap_strength,
+            "pre_gap_presence": pre_gap_presence,
+            "pre_gap_uncertainty": pre_gap_uncertainty,
+            "pre_gap_source_evidence": pre_gap_source_evidence,
+            "gap_active": gap_active,
+            "gap_age": gap_age,
+            "reacquisition_consumed": reacquisition_consumed,
         }
 
     def commit_topk(
@@ -999,6 +1394,25 @@ class EvidenceLedger(nn.Module):
         )
         reference_valid = _gather(
             query_state["reference_valid"], topk_indexes
+        ).bool()
+        pre_gap_strength = _gather(
+            query_state["pre_gap_strength"], topk_indexes
+        )
+        pre_gap_presence = _gather(
+            query_state["pre_gap_presence"], topk_indexes
+        )
+        pre_gap_uncertainty = _gather(
+            query_state["pre_gap_uncertainty"], topk_indexes
+        )
+        pre_gap_source_evidence = _gather(
+            query_state["pre_gap_source_evidence"], topk_indexes
+        )
+        gap_active = _gather(
+            query_state["gap_active"], topk_indexes
+        ).bool()
+        gap_age = _gather(query_state["gap_age"], topk_indexes)
+        reacquisition_consumed = _gather(
+            query_state["reacquisition_consumed"], topk_indexes
         ).bool()
 
         if valid_write_mask is None:
@@ -1048,6 +1462,23 @@ class EvidenceLedger(nn.Module):
             torch.zeros_like(reference_ternary_distribution),
         )
         reference_valid = reference_valid & valid
+        pre_gap_strength = torch.where(
+            valid, pre_gap_strength, torch.zeros_like(pre_gap_strength)
+        )
+        pre_gap_presence = torch.where(
+            valid, pre_gap_presence, torch.zeros_like(pre_gap_presence)
+        )
+        pre_gap_uncertainty = torch.where(
+            valid, pre_gap_uncertainty, torch.zeros_like(pre_gap_uncertainty)
+        )
+        pre_gap_source_evidence = torch.where(
+            valid.unsqueeze(-1),
+            pre_gap_source_evidence,
+            torch.zeros_like(pre_gap_source_evidence),
+        )
+        gap_active = gap_active & valid
+        gap_age = torch.where(valid, gap_age, torch.zeros_like(gap_age))
+        reacquisition_consumed = reacquisition_consumed & valid
 
         self.alpha = torch.cat((alpha.detach(), self.alpha), dim=1)
         self.beta = torch.cat((beta.detach(), self.beta), dim=1)
@@ -1085,6 +1516,35 @@ class EvidenceLedger(nn.Module):
         )
         self.reference_valid = torch.cat(
             (reference_valid.detach(), self.reference_valid), dim=1
+        )
+        self.pre_gap_strength = torch.cat(
+            (pre_gap_strength.detach(), self.pre_gap_strength), dim=1
+        )
+        self.pre_gap_presence = torch.cat(
+            (pre_gap_presence.detach(), self.pre_gap_presence), dim=1
+        )
+        self.pre_gap_uncertainty = torch.cat(
+            (pre_gap_uncertainty.detach(), self.pre_gap_uncertainty), dim=1
+        )
+        self.pre_gap_source_evidence = torch.cat(
+            (
+                pre_gap_source_evidence.detach(),
+                self.pre_gap_source_evidence,
+            ),
+            dim=1,
+        )
+        self.gap_active = torch.cat(
+            (gap_active.detach(), self.gap_active), dim=1
+        )
+        self.gap_age = torch.cat(
+            (gap_age.detach(), self.gap_age), dim=1
+        )
+        self.reacquisition_consumed = torch.cat(
+            (
+                reacquisition_consumed.detach(),
+                self.reacquisition_consumed,
+            ),
+            dim=1,
         )
 
     @staticmethod
