@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
 
 import csv
+import os
 from collections import defaultdict
 from pathlib import Path
 
 
 ROOT = Path.home() / "research/evidence3d"
 
-RESULT_ROOT = (
-    ROOT
-    / "outputs/gt_recovery_predictions"
-    / "source_aware_ft400_fp32"
+RESULT_ROOT = Path(
+    os.environ.get(
+        "EVIDENCE3D_GT_RECOVERY_ROOT",
+        str(
+            ROOT
+            / "outputs/gt_recovery_predictions"
+            / "source_aware_ft400_fp32"
+        ),
+    )
 )
 
 RAW_SUMMARY_PATH = (
@@ -23,18 +29,26 @@ DETAIL_PATH = (
     / "gt_recovery_frame_details.csv"
 )
 
-OUTPUT_PATH = (
-    RESULT_ROOT
-    / "gt_recovery_delay_robust_summary.csv"
+OUTPUT_PATH = Path(
+    os.environ.get(
+        "EVIDENCE3D_GT_RECOVERY_SUMMARY",
+        str(RESULT_ROOT / "gt_recovery_delay_robust_summary.csv"),
+    )
 )
 
-WINDOW_OUTPUT_PATH = (
-    RESULT_ROOT
-    / "gt_recovery_delay_robust_windows.csv"
+WINDOW_OUTPUT_PATH = Path(
+    os.environ.get(
+        "EVIDENCE3D_GT_RECOVERY_WINDOWS",
+        str(RESULT_ROOT / "gt_recovery_delay_robust_windows.csv"),
+    )
 )
 
-RECOVERY_THRESHOLD = 0.90
-WINDOW_FRAMES = 2
+RECOVERY_THRESHOLD = float(
+    os.environ.get("EVIDENCE3D_RECOVERY_THRESHOLD", "0.90")
+)
+WINDOW_FRAMES = int(
+    os.environ.get("EVIDENCE3D_RECOVERY_WINDOW", "2")
+)
 MIN_CLEAN_SUPPORT = 5
 
 

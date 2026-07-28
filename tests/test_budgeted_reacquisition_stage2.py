@@ -11,6 +11,7 @@ import torch
 from models.evidence_ledger import EvidenceLedger
 from models.innovation import ReliabilityCalibratedInnovation
 from models.temporal_update import EvidenceConservingTemporalUpdate
+from datasets.corruption import ApplyPartialObservation
 
 
 def _ledger(
@@ -397,3 +398,69 @@ def test_residual_preserving_is_positive_only_trust_region():
         state["actual_added_negative_evidence"],
         state["base_negative_evidence"],
     )
+
+
+def test_curriculum_is_deterministic_and_worker_safe():
+    transform = ApplyPartialObservation(training=True, seed=2026)
+    transform.configure_curriculum(
+        dict(
+            ratios=dict(
+                clean=0.45,
+                crash_or_lost=0.20,
+                visual=0.15,
+                long_fault=0.10,
+                compound=0.10,
+            ),
+            durations=(1, 3, 5, 10, 20),
+        )
+    )
+    first = [
+        transform._curriculum_state("scene-a", frame)
+        for frame in range(80)
+    ]
+    second = [
+        transform._curriculum_state("scene-a", frame)
+        for frame in range(80)
+    ]
+    assert first == second
+
+
+def test_curriculum_randomizes_cameras_across_scenes():
+    transform = ApplyPartialObservation(training=True, seed=2026)
+    transform.configure_curriculum(
+        dict(
+            ratios=dict(
+                clean=0.0,
+                crash_or_lost=1.0,
+                visual=0.0,
+                long_fault=0.0,
+                compound=0.0,
+            ),
+            durations=(20,),
+            cycle_frames=20,
+        )
+    )
+    affected = set()
+    for scene in range(30):
+        for frame in range(20):
+            state = transform._curriculum_state(str(scene), frame)
+            affected.update(state["failed_cameras"])
+            affected.update(state["lost_cameras"])
+    assert len(affected) > 1
+    assert affected != {"CAM_BACK"}
+
+
+def test_curriculum_rejects_invalid_ratios():
+    transform = ApplyPartialObservation(training=True)
+    with pytest.raises(ValueError, match="sum to one"):
+        transform.configure_curriculum(
+            dict(
+                ratios=dict(
+                    clean=0.5,
+                    crash_or_lost=0.5,
+                    visual=0.5,
+                    long_fault=0.0,
+                    compound=0.0,
+                )
+            )
+        )

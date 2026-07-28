@@ -3,6 +3,7 @@
 import csv
 import json
 import math
+import os
 from collections import defaultdict
 from pathlib import Path
 
@@ -16,10 +17,15 @@ ROOT = Path.home() / "research/evidence3d"
 
 DATA_ROOT = ROOT / "data/nuscenes-mini"
 
-RESULT_ROOT = (
-    ROOT
-    / "outputs/gt_recovery_predictions"
-    / "source_aware_ft400_fp32"
+RESULT_ROOT = Path(
+    os.environ.get(
+        "EVIDENCE3D_GT_RECOVERY_ROOT",
+        str(
+            ROOT
+            / "outputs/gt_recovery_predictions"
+            / "source_aware_ft400_fp32"
+        ),
+    )
 )
 
 CLEAN_EXPERIMENT = "clean_no_corruption"

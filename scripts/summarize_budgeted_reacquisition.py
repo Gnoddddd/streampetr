@@ -7,6 +7,7 @@ import argparse
 import csv
 import json
 import math
+import re
 from pathlib import Path
 
 import numpy as np
@@ -20,6 +21,7 @@ FIELDS = (
     "reacquisition_gate",
     "conservation_residual",
 )
+DETECTION_METRICS = ("mAP", "NDS", "mATE", "mASE", "mAOE", "mAVE", "mAAE")
 
 
 def _flat(value):
@@ -63,7 +65,7 @@ def main():
                     _flat(diagnostics.get("is_reacquired", [])).astype(bool).sum()
                 )
                 bonus = _flat(diagnostics.get("restoration_bonus", []))
-                counts["bonus"] += int((bonus > 0).sum())
+                counts["bonus"] += int((bonus > 1e-8).sum())
                 counts["violation"] += int(
                     _flat(
                         diagnostics.get("conservation_violation_mask", [])
@@ -80,8 +82,31 @@ def main():
                     )
         queries = max(counts["queries"], 1)
         residual = np.abs(np.asarray(values["conservation_residual"]))
+        positive_bonus = [
+            value for value in values["restoration_bonus"] if value > 1e-8
+        ]
+        log_path = path.parents[1] / "evaluation.log"
+        log_text = (
+            log_path.read_text(encoding="utf-8", errors="replace")
+            if log_path.is_file()
+            else ""
+        )
+        detection = {}
+        for metric in DETECTION_METRICS:
+            matches = re.findall(
+                rf"{re.escape(metric)}:\s*([-+]?(?:\d+\.\d+|\d+))",
+                log_text,
+            )
+            detection[metric] = (
+                float(matches[-1]) if matches else math.nan
+            )
         row = {
-            "experiment": path.parent.parent.name,
+            "candidate": path.parents[2].name,
+            "protocol": path.parents[1].name,
+            "experiment": (
+                path.parents[2].name + "_" + path.parents[1].name
+            ),
+            **detection,
             "records": records,
             "queries": counts["queries"],
             "restoration_trigger_count": counts["bonus"],
@@ -91,6 +116,9 @@ def main():
             "bonus_mean": _number(values["restoration_bonus"], "mean"),
             "bonus_p90": _number(values["restoration_bonus"], 0.90),
             "bonus_p99": _number(values["restoration_bonus"], 0.99),
+            "positive_bonus_mean": _number(positive_bonus, "mean"),
+            "positive_bonus_p90": _number(positive_bonus, 0.90),
+            "positive_bonus_p99": _number(positive_bonus, 0.99),
             "lost_strength_mean": _number(values["lost_strength"], "mean"),
             "motion_consistency_mean": _number(
                 values["motion_consistency"], "mean"

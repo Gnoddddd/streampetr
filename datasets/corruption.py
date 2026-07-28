@@ -124,6 +124,7 @@ class ApplyPartialObservation:
         motion_blur_prob: float = 0.08,
         max_severity: float = 0.8,
         visual_ablation_mode: str = "full",
+        curriculum_cfg: Optional[Dict] = None,
     ) -> None:
         self.camera_names = tuple(camera_names)
         self.training = bool(training)
@@ -135,6 +136,9 @@ class ApplyPartialObservation:
         self.fog_prob = float(fog_prob)
         self.motion_blur_prob = float(motion_blur_prob)
         self.max_severity = float(max_severity)
+        self.curriculum_cfg: Optional[Dict] = None
+        if curriculum_cfg is not None:
+            self.configure_curriculum(curriculum_cfg)
 
         requested_mode = os.environ.get(
             "EVIDENCE3D_VISUAL_ABLATION_MODE",
@@ -194,6 +198,110 @@ class ApplyPartialObservation:
                 state[key][name] = float(rng.uniform(0.2, self.max_severity))
         return state
 
+    def configure_curriculum(self, curriculum_cfg: Dict) -> None:
+        """Enable a deterministic, worker-safe temporal corruption curriculum."""
+        cfg = dict(curriculum_cfg)
+        ratios = dict(
+            cfg.get(
+                "ratios",
+                {
+                    "clean": 0.45,
+                    "crash_or_lost": 0.20,
+                    "visual": 0.15,
+                    "long_fault": 0.10,
+                    "compound": 0.10,
+                },
+            )
+        )
+        required = {
+            "clean",
+            "crash_or_lost",
+            "visual",
+            "long_fault",
+            "compound",
+        }
+        if set(ratios) != required:
+            raise ValueError(
+                f"curriculum ratios must contain exactly {sorted(required)}"
+            )
+        total = sum(float(value) for value in ratios.values())
+        if any(float(value) < 0.0 for value in ratios.values()) or abs(total - 1.0) > 1e-6:
+            raise ValueError("curriculum ratios must be non-negative and sum to one")
+        durations = tuple(
+            int(value)
+            for value in cfg.get("durations", (1, 3, 5, 10, 20))
+        )
+        if not durations or any(value <= 0 for value in durations):
+            raise ValueError("curriculum durations must be positive")
+        self.curriculum_cfg = {
+            "ratios": ratios,
+            "durations": durations,
+            "cycle_frames": max(int(cfg.get("cycle_frames", 40)), 20),
+        }
+
+    def _curriculum_state(self, scene_token: str, frame_idx: int) -> Dict:
+        empty = {
+            "failed_cameras": [],
+            "lost_cameras": [],
+            "dark": {},
+            "fog": {},
+            "motion_blur": {},
+        }
+        cfg = self.curriculum_cfg
+        if cfg is None:
+            return empty
+        cycle_frames = cfg["cycle_frames"]
+        categories = tuple(cfg["ratios"])
+        probabilities = tuple(cfg["ratios"][name] for name in categories)
+        current_cycle = frame_idx // cycle_frames
+        for cycle in (current_cycle - 1, current_cycle):
+            if cycle < 0:
+                continue
+            rng = np.random.default_rng(
+                _stable_seed(self.seed, scene_token, cycle)
+            )
+            category = str(rng.choice(categories, p=probabilities))
+            if category == "clean":
+                continue
+            duration_choices = cfg["durations"]
+            if category == "long_fault":
+                duration_choices = tuple(
+                    value for value in duration_choices if value >= 10
+                )
+            duration = int(rng.choice(duration_choices))
+            start = cycle * cycle_frames + int(
+                rng.integers(0, max(cycle_frames - duration + 1, 1))
+            )
+            if not start <= frame_idx < start + duration:
+                continue
+            state = {key: ({} if isinstance(value, dict) else [])
+                     for key, value in empty.items()}
+            camera = str(rng.choice(self.camera_names))
+            if category in {"crash_or_lost", "long_fault"}:
+                key = (
+                    "failed_cameras"
+                    if rng.random() < 0.5
+                    else "lost_cameras"
+                )
+                state[key] = [camera]
+            elif category == "visual":
+                key = str(rng.choice(("fog", "dark", "motion_blur")))
+                state[key][camera] = float(
+                    rng.uniform(0.2, self.max_severity)
+                )
+            elif category == "compound":
+                state["failed_cameras"] = [camera]
+                available = [
+                    name for name in self.camera_names if name != camera
+                ]
+                visual_camera = str(rng.choice(available))
+                key = str(rng.choice(("fog", "dark", "motion_blur")))
+                state[key][visual_camera] = float(
+                    rng.uniform(0.2, self.max_severity)
+                )
+            return state
+        return empty
+
     def __call__(self, results: Dict) -> Dict:
         images = results.get("img")
         if images is None:
@@ -240,7 +348,11 @@ class ApplyPartialObservation:
         elif self.training and os.environ.get(
             "EVIDENCE3D_DISABLE_RANDOM_CORRUPTION", "0"
         ).lower() not in {"1", "true", "yes", "on"}:
-            state = self._random_state(rng)
+            state = (
+                self._curriculum_state(scene_token, frame_idx)
+                if self.curriculum_cfg is not None
+                else self._random_state(rng)
+            )
 
         output = _copy_images(images)
         online = np.ones(len(self.camera_names), dtype=np.float32)
