@@ -26,6 +26,13 @@ PROTOCOLS = {
     "compound": "fixed_v3_stage2_compound_fog_crash_10f",
 }
 
+HISTORICAL_TRACE_NAMES = {
+    "clean": "clean_no_corruption_diagnostic_trace.jsonl",
+    "crash5": "camera_crash_back_5f_diagnostic_trace.jsonl",
+    "crash10": "camera_crash_back_10f_diagnostic_trace.jsonl",
+    "compound": "compound_fog_crash_10f_diagnostic_trace.jsonl",
+}
+
 NUMERIC_DIAGNOSTICS = (
     "alpha",
     "beta",
@@ -38,6 +45,12 @@ NUMERIC_DIAGNOSTICS = (
     "conservation_residual",
     "source_mass_residual",
     "topk_indexes",
+)
+
+HISTORICAL_NUMERIC_DIAGNOSTICS = tuple(
+    key
+    for key in NUMERIC_DIAGNOSTICS
+    if key not in {"previous_action", "topk_indexes"}
 )
 
 HASH_DIAGNOSTICS = (
@@ -133,6 +146,9 @@ def compare_traces(
     left: List[Dict[str, Any]],
     right: List[Dict[str, Any]],
     protocol: str,
+    comparison: str = "legacy_vs_disabled",
+    numeric_diagnostics: Iterable[str] = NUMERIC_DIAGNOSTICS,
+    hash_diagnostics: Iterable[str] = HASH_DIAGNOSTICS,
 ) -> List[Dict[str, Any]]:
     if len(left) != len(right):
         raise RuntimeError(
@@ -140,7 +156,7 @@ def compare_traces(
             f"{len(left)} != {len(right)}"
         )
     rows: List[Dict[str, Any]] = []
-    for key in NUMERIC_DIAGNOSTICS:
+    for key in numeric_diagnostics:
         exact = True
         maximum = 0.0
         values = 0
@@ -163,7 +179,7 @@ def compare_traces(
             mismatch_frames += int(not same)
         rows.append(
             {
-                "comparison": "legacy_vs_disabled",
+                "comparison": comparison,
                 "protocol": protocol,
                 "component": key,
                 "records": len(left),
@@ -173,7 +189,7 @@ def compare_traces(
                 "mismatch_frames": mismatch_frames,
             }
         )
-    for key in HASH_DIAGNOSTICS:
+    for key in hash_diagnostics:
         mismatches = sum(
             left_record["diagnostics"].get(key)
             != right_record["diagnostics"].get(key)
@@ -181,7 +197,7 @@ def compare_traces(
         )
         rows.append(
             {
-                "comparison": "legacy_vs_disabled",
+                "comparison": comparison,
                 "protocol": protocol,
                 "component": key,
                 "records": len(left),
@@ -339,6 +355,33 @@ def main() -> None:
         )
         disabled_trace = read_trace(
             INFERENCE / "disabled" / protocol / "trace.jsonl"
+        )
+        historical_trace = read_trace(
+            S22
+            / "eval"
+            / historical_name
+            / "evidence_trace"
+            / HISTORICAL_TRACE_NAMES[protocol]
+        )
+        invariance_rows.extend(
+            compare_traces(
+                historical_trace,
+                legacy_trace,
+                protocol,
+                comparison="s2_2_stable_vs_legacy",
+                numeric_diagnostics=HISTORICAL_NUMERIC_DIAGNOSTICS,
+                hash_diagnostics=(),
+            )
+        )
+        invariance_rows.extend(
+            compare_traces(
+                historical_trace,
+                disabled_trace,
+                protocol,
+                comparison="s2_2_stable_vs_disabled",
+                numeric_diagnostics=HISTORICAL_NUMERIC_DIAGNOSTICS,
+                hash_diagnostics=(),
+            )
         )
         invariance_rows.extend(
             compare_traces(legacy_trace, disabled_trace, protocol)
