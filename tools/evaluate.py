@@ -67,6 +67,11 @@ def parse_args():
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--eval", default="bbox")
     parser.add_argument("--protocol", default=None)
+    parser.add_argument(
+        "--reacquisition-diagnostics",
+        action="store_true",
+        help="Enable the read-only S2.3 reacquisition observer.",
+    )
     parser.add_argument("--master-port", type=int, default=29517)
     parser.add_argument("upstream_args", nargs=argparse.REMAINDER)
     return parser.parse_args()
@@ -97,6 +102,7 @@ def main() -> int:
         "--eval",
         args.eval,
     ]
+    cfg_options = []
     if args.protocol:
         protocol_cfg_path = resolve_protocol_cfg_path(Config.fromfile(str(config)))
         print(
@@ -105,12 +111,13 @@ def main() -> int:
             flush=True,
         )
         # The environment variable is retained for trace naming/provenance.
-        command.extend(
-            [
-                "--cfg-options",
-                f"{protocol_cfg_path}={protocol}",
-            ]
+        cfg_options.append(f"{protocol_cfg_path}={protocol}")
+    if args.reacquisition_diagnostics:
+        cfg_options.append(
+            "model.pts_bbox_head.enable_reacquisition_diagnostics=True"
         )
+    if cfg_options:
+        command.extend(["--cfg-options", *cfg_options])
     extra = list(args.upstream_args)
     if extra and extra[0] == "--":
         extra = extra[1:]
