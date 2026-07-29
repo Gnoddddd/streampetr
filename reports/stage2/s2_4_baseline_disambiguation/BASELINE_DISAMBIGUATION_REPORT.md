@@ -110,18 +110,22 @@ temporal memory和最终预测均发生分叉，最终预测最大绝对差
 
 ## 方法定义回答
 
-1. **fixed correlation是否真正改善性能？**  
+1. **fixed correlation是否真正改善性能？**
+
    否。它降低Clean和故障平均，只在Compound产生不足千分之一的局部增量。
 
-2. **当前s2.2-stable应如何定义？**  
+2. **当前s2.2-stable应如何定义？**
+
    定义为“已含历史 fixed correlation/N_eff 行为”的稳定版本，不能称为
    canonical no-discount。
 
-3. **S2.4还能否把fixed correlation作为新方法？**  
+3. **S2.4还能否把fixed correlation作为新方法？**
+
    不能。该行为已经存在于S2.2，且C1逐tensor复现S2.2；它不是相对S2.2的
    新增方法。
 
-4. **下一步方向？**  
+4. **下一步方向？**
+
    采用C0 canonical no-discount作为清晰基线；不保留legacy作为性能方法，
    当前也不进入动态矩阵。动态相关性若以后重启，应重新预注册并相对C0
    证明增量，不应沿用被混淆的S2.2方法命名。
