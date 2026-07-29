@@ -171,6 +171,18 @@ class GeometricObservabilityHead(nn.Module):
         """
 
         xyz, squeeze_layer = self._as_layered(query_xyz)
+        output_dtype = xyz.dtype
+        cpu_half = (
+            xyz.device.type == "cpu"
+            and output_dtype == torch.float16
+        )
+        if cpu_half:
+            # PyTorch 1.9 lacks several CPU Half kernels used by projection
+            # and boundary gates. Keep the public dtype while computing the
+            # stateless observability path in fp32.
+            xyz = xyz.float()
+            if query_features is not None:
+                query_features = query_features.float()
         if xyz.shape[-1] != 3:
             raise ValueError("query_xyz last dimension must be 3")
         layers, batch_size, num_queries, _ = xyz.shape
@@ -307,4 +319,11 @@ class GeometricObservabilityHead(nn.Module):
         }
         if squeeze_layer:
             output = {key: value.squeeze(0) for key, value in output.items()}
+        if cpu_half:
+            output = {
+                key: value.to(output_dtype)
+                if torch.is_tensor(value) and value.is_floating_point()
+                else value
+                for key, value in output.items()
+            }
         return output
