@@ -1355,7 +1355,13 @@ class EvidenceLedger(nn.Module):
                 "reference_geometry"
             ].detach(),
             "previous_source_vector": priors["provenance"].detach(),
+            "previous_source_evidence": priors[
+                "source_evidence"
+            ].detach(),
+            "prior_alpha": priors["alpha"],
+            "prior_beta": priors["beta"],
             "previous_action": priors["previous_action"],
+            "ternary_probabilities": ternary_probabilities.detach(),
             "reference_class_distribution": current_class_probability.detach(),
             "reference_ternary_distribution": ternary_probabilities.detach(),
             "reference_valid": current_reference_valid,
@@ -1367,6 +1373,203 @@ class EvidenceLedger(nn.Module):
             "gap_age": gap_age,
             "reacquisition_consumed": reacquisition_consumed,
         }
+
+    def apply_reacquisition_control(
+        self,
+        query_state: Dict[str, Tensor],
+        isolation_mask: Tensor,
+        confirmed_mask: Optional[Tensor] = None,
+        confirmation_bonus: Optional[Tensor] = None,
+        confirmation_prior_alpha: Optional[Tensor] = None,
+        confirmation_prior_beta: Optional[Tensor] = None,
+        confirmation_prior_source_evidence: Optional[Tensor] = None,
+        raw_source_vector: Optional[Tensor] = None,
+    ) -> Dict[str, Tensor]:
+        """Apply formal-ledger isolation and one-shot confirmed evidence.
+
+        This is a second, deterministic ledger pass.  Candidate discovery is
+        computed by the unchanged S2.3 logic; unconfirmed candidates are then
+        replaced by a zero-addition decay update.  Confirmed candidates use
+        their pending identity's stored prior and receive exactly one bonus.
+        """
+        isolation_mask = isolation_mask.bool()
+        if isolation_mask.shape != query_state["alpha"].shape:
+            raise ValueError("isolation_mask must share [B,Q] layout")
+        confirmed_mask = (
+            torch.zeros_like(isolation_mask)
+            if confirmed_mask is None
+            else confirmed_mask.bool()
+        )
+        if confirmed_mask.shape != isolation_mask.shape:
+            raise ValueError("confirmed_mask must share [B,Q] layout")
+        confirmed_mask = confirmed_mask & isolation_mask
+        isolated_only = isolation_mask & (~confirmed_mask)
+        if not isolation_mask.any():
+            query_state["memory_isolation_mask"] = isolation_mask
+            query_state["confirmed_reacquisition_mask"] = confirmed_mask
+            return query_state
+
+        reference = query_state["alpha"]
+        zeros = torch.zeros_like(reference)
+        confirmation_bonus = (
+            zeros
+            if confirmation_bonus is None
+            else confirmation_bonus.to(reference)
+        )
+        prior_alpha = query_state["prior_alpha"]
+        prior_beta = query_state["prior_beta"]
+        if confirmation_prior_alpha is not None:
+            prior_alpha = torch.where(
+                confirmed_mask,
+                confirmation_prior_alpha.to(reference),
+                prior_alpha,
+            )
+        if confirmation_prior_beta is not None:
+            prior_beta = torch.where(
+                confirmed_mask,
+                confirmation_prior_beta.to(reference),
+                prior_beta,
+            )
+        positive = torch.where(
+            confirmed_mask,
+            query_state["base_positive_evidence"] + confirmation_bonus,
+            zeros,
+        )
+        negative = torch.where(
+            confirmed_mask,
+            query_state["base_negative_evidence"],
+            zeros,
+        )
+        ternary = query_state["ternary_probabilities"]
+        controlled_update = self.temporal_update(
+            prior_alpha,
+            prior_beta,
+            ternary[..., 0],
+            ternary[..., 1],
+            query_state["observability"],
+            query_state["novelty"],
+            query_state["effective_count"],
+            positive_evidence_override=positive,
+            negative_evidence_override=negative,
+        )
+        for key, value in controlled_update.items():
+            if key in query_state:
+                query_state[key] = torch.where(
+                    isolation_mask, value, query_state[key]
+                )
+
+        if self.enable_source_ledger:
+            prior_source = query_state["previous_source_evidence"]
+            if confirmation_prior_source_evidence is not None:
+                prior_source = torch.where(
+                    confirmed_mask.unsqueeze(-1),
+                    confirmation_prior_source_evidence.to(prior_source),
+                    prior_source,
+                )
+            source = (
+                query_state["current_source_vector"]
+                if raw_source_vector is None
+                else raw_source_vector
+            )
+            controlled_source = self._update_source_ledger(
+                prior_source,
+                source,
+                controlled_update["actual_added_positive_evidence"]
+                + controlled_update["actual_added_negative_evidence"],
+            )
+            for key, value in controlled_source.items():
+                if key in query_state:
+                    expand_mask = isolation_mask
+                    while expand_mask.ndim < value.ndim:
+                        expand_mask = expand_mask.unsqueeze(-1)
+                    query_state[key] = torch.where(
+                        expand_mask, value, query_state[key]
+                    )
+            query_state["provenance"] = query_state["source_evidence"] / (
+                query_state["source_strength"].unsqueeze(-1).clamp_min(
+                    self.novelty_eps
+                )
+            )
+            query_state["provenance"] = torch.where(
+                query_state["source_strength"].unsqueeze(-1)
+                > self.novelty_eps,
+                query_state["provenance"],
+                torch.zeros_like(query_state["provenance"]),
+            )
+
+        controlled_age = torch.where(
+            confirmed_mask,
+            torch.zeros_like(query_state["age"]),
+            query_state["age"] + 1,
+        )
+        query_state["age"] = torch.where(
+            isolation_mask, controlled_age, query_state["age"]
+        )
+        decision = self.policy(
+            query_state["observability"],
+            query_state["existence_probability"],
+            query_state["uncertainty"],
+            query_state["age"],
+            ternary[..., 1],
+            query_state["prior_strength"],
+        )
+        for key in ("action", "score_scale", "write_mask"):
+            query_state[key] = torch.where(
+                isolation_mask, decision[key], query_state[key]
+            )
+        query_state["action"] = torch.where(
+            isolated_only,
+            torch.full_like(
+                query_state["action"], int(Action.DEFER)
+            ),
+            query_state["action"],
+        )
+        query_state["score_scale"] = torch.where(
+            isolated_only,
+            torch.full_like(
+                query_state["score_scale"],
+                self.policy.defer_score_scale,
+            ),
+            query_state["score_scale"],
+        )
+        query_state["write_mask"] = torch.where(
+            isolated_only,
+            torch.zeros_like(query_state["write_mask"]),
+            query_state["write_mask"],
+        )
+        # A confirmed identity has already met the cross-frame admission gate.
+        query_state["action"] = torch.where(
+            confirmed_mask,
+            torch.full_like(
+                query_state["action"], int(Action.RECOVER)
+            ),
+            query_state["action"],
+        )
+        query_state["score_scale"] = torch.where(
+            confirmed_mask,
+            torch.full_like(
+                query_state["score_scale"],
+                self.policy.recover_score_scale,
+            ),
+            query_state["score_scale"],
+        )
+        query_state["write_mask"] = (
+            query_state["write_mask"] | confirmed_mask
+        )
+        query_state["restoration_bonus"] = torch.where(
+            isolation_mask,
+            torch.where(confirmed_mask, confirmation_bonus, zeros),
+            query_state["restoration_bonus"],
+        )
+        query_state["reacquisition_consumed"] = (
+            query_state["reacquisition_consumed"] | confirmed_mask
+        )
+        query_state["gap_active"] = (
+            query_state["gap_active"] & (~confirmed_mask)
+        )
+        query_state["memory_isolation_mask"] = isolation_mask
+        query_state["confirmed_reacquisition_mask"] = confirmed_mask
+        return query_state
 
     def commit_topk(
         self,

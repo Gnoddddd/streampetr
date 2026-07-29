@@ -31,6 +31,7 @@ from mmdet.models.utils.transformer import inverse_sigmoid
 from .evidence_ledger import EvidenceLedger
 from .keep_recover_defer import KeepRecoverDeferPolicy
 from .observability_head import GeometricObservabilityHead
+from .pending_reacquisition import PendingReacquisitionTracker
 from .temporal_update import EvidenceConservingTemporalUpdate
 from .ternary_objectness import (
     ObservabilityConditionedTernaryLoss,
@@ -75,6 +76,16 @@ class EvidenceConservingStreamPETRHead(StreamPETRHead):
         innovation_transition_iters: int = 0,
         reacquisition_warmup_iters: int = 10,
         enable_reacquisition_diagnostics: bool = False,
+        enable_memory_isolation: bool = False,
+        enable_two_phase_reacquisition: bool = False,
+        confirmation_frames: int = 2,
+        pending_max_age: int = 3,
+        class_consistency_required: bool = True,
+        center_distance_threshold: float = 2.0,
+        motion_distance_threshold: float = 2.0,
+        minimum_confirmation_score: float = 0.075,
+        minimum_confirmation_reliability: float = 0.65,
+        allow_pending_memory_write: bool = False,
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -152,6 +163,27 @@ class EvidenceConservingStreamPETRHead(StreamPETRHead):
         self.enable_reacquisition_diagnostics = bool(
             enable_reacquisition_diagnostics
         )
+        self.enable_memory_isolation = bool(enable_memory_isolation)
+        self.enable_two_phase_reacquisition = bool(
+            enable_two_phase_reacquisition
+        )
+        if self.enable_two_phase_reacquisition and not self.enable_memory_isolation:
+            raise ValueError(
+                "two-phase reacquisition requires memory isolation"
+            )
+        self.allow_pending_memory_write = bool(allow_pending_memory_write)
+        self.pending_reacquisition = PendingReacquisitionTracker(
+            capacity=max(int(self.topk_proposals), 16),
+            num_sources=self.num_cameras,
+            confirmation_frames=confirmation_frames,
+            pending_max_age=pending_max_age,
+            class_consistency_required=class_consistency_required,
+            center_distance_threshold=center_distance_threshold,
+            motion_distance_threshold=motion_distance_threshold,
+            minimum_confirmation_score=minimum_confirmation_score,
+            minimum_confirmation_reliability=minimum_confirmation_reliability,
+            enable_confirmation=self.enable_two_phase_reacquisition,
+        )
         self.register_buffer(
             "reacquisition_training_step",
             torch.zeros((), dtype=torch.long),
@@ -166,6 +198,8 @@ class EvidenceConservingStreamPETRHead(StreamPETRHead):
         super().reset_memory()
         if hasattr(self, "evidence_ledger"):
             self.evidence_ledger.reset()
+        if hasattr(self, "pending_reacquisition"):
+            self.pending_reacquisition.reset()
         self._last_evidence_summary = {}
         self._last_evidence_diagnostics = {}
 
@@ -327,6 +361,137 @@ class EvidenceConservingStreamPETRHead(StreamPETRHead):
         if self.training:
             self.reacquisition_training_step.add_(1)
 
+        r2_tracker_state: Dict[str, Tensor] = {}
+        if self.enable_memory_isolation:
+            query_index = torch.arange(
+                num_queries,
+                device=rec_cls.device,
+                dtype=torch.long,
+            ).view(1, -1).expand(rec_cls.shape[0], -1)
+            query_source = torch.zeros_like(query_index)
+            query_source[:, num_base_queries:] = 1
+            class_confidence, predicted_class = rec_cls.sigmoid().max(dim=-1)
+            current_center_global = transform_reference_points(
+                rec_bbox[..., :3].detach(),
+                data["ego_pose"],
+                reverse=False,
+            )
+            velocity_3d = torch.cat(
+                (
+                    rec_bbox[..., -2:],
+                    torch.zeros_like(rec_bbox[..., -2:-1]),
+                ),
+                dim=-1,
+            )
+            velocity_global = torch.matmul(
+                data["ego_pose"][..., :3, :3].unsqueeze(1),
+                velocity_3d.unsqueeze(-1),
+            ).squeeze(-1)[..., :2]
+            preliminary_score = (
+                class_confidence
+                * query_state["existence_probability"]
+                * query_state["score_scale"]
+            )
+            scene_tokens = self.evidence_ledger._scene_tokens or tuple(
+                "" for _ in range(rec_cls.shape[0])
+            )
+            r2_tracker_state = self.pending_reacquisition.step(
+                scene_tokens=scene_tokens,
+                seed_mask=query_state["is_reacquired"],
+                predicted_class=predicted_class,
+                center=current_center_global,
+                velocity=velocity_global,
+                score=preliminary_score,
+                reliability=query_state["current_reliability"],
+                proposed_bonus=query_state["restoration_bonus"],
+                prior_alpha=(
+                    1.0
+                    + self.evidence_ledger.temporal_update.gamma
+                    * (query_state["prior_alpha"] - 1.0)
+                ),
+                prior_beta=(
+                    1.0
+                    + self.evidence_ledger.temporal_update.gamma
+                    * (query_state["prior_beta"] - 1.0)
+                ),
+                prior_source_evidence=(
+                    self.evidence_ledger.source_decay
+                    * query_state["previous_source_evidence"]
+                ),
+                timestamp=data["timestamp"],
+                query_source=query_source,
+                reset_mask=(data["prev_exists"] <= 0),
+            )
+            isolation_mask = r2_tracker_state["isolation_mask"]
+            if self.allow_pending_memory_write:
+                isolation_mask = torch.zeros_like(isolation_mask)
+            confirmed_mask = r2_tracker_state[
+                "confirmation_ready_mask"
+            ] & isolation_mask
+            # Confirmation admissions can never exceed formal memory capacity.
+            for batch_index in range(confirmed_mask.shape[0]):
+                ready_indexes = confirmed_mask[batch_index].nonzero(
+                    as_tuple=False
+                ).flatten()
+                if ready_indexes.numel() <= self.topk_proposals:
+                    continue
+                ready_scores = preliminary_score[
+                    batch_index, ready_indexes
+                ]
+                keep = ready_indexes[
+                    torch.topk(
+                        ready_scores,
+                        self.topk_proposals,
+                    ).indices
+                ]
+                confirmed_mask[batch_index].fill_(False)
+                confirmed_mask[batch_index, keep] = True
+            query_state = self.evidence_ledger.apply_reacquisition_control(
+                query_state,
+                isolation_mask,
+                confirmed_mask=confirmed_mask,
+                confirmation_bonus=r2_tracker_state[
+                    "confirmation_bonus"
+                ],
+                confirmation_prior_alpha=r2_tracker_state[
+                    "confirmation_prior_alpha"
+                ],
+                confirmation_prior_beta=r2_tracker_state[
+                    "confirmation_prior_beta"
+                ],
+                confirmation_prior_source_evidence=r2_tracker_state[
+                    "confirmation_prior_source_evidence"
+                ],
+                raw_source_vector=rec_raw_source,
+            )
+            query_state.update(
+                {
+                    "reacquisition_candidate_mask": r2_tracker_state[
+                        "candidate_mask"
+                    ],
+                    "pending_reacquisition_mask": r2_tracker_state[
+                        "pending_mask"
+                    ],
+                    "confirmation_ready_mask": r2_tracker_state[
+                        "confirmation_ready_mask"
+                    ],
+                    "confirmed_reacquisition_mask": confirmed_mask,
+                    "rejected_reacquisition_mask": r2_tracker_state[
+                        "rejected_query_mask"
+                    ],
+                    "pending_runtime_id": r2_tracker_state["runtime_id"],
+                    "pending_rejected_count": r2_tracker_state[
+                        "rejected_count"
+                    ],
+                    "pending_expired_count": r2_tracker_state[
+                        "expired_count"
+                    ],
+                    "active_pending_count": r2_tracker_state[
+                        "active_pending_count"
+                    ],
+                }
+            )
+
         bootstrap_eps = float(
             self.evidence_ledger.temporal_update.eps
         )
@@ -426,6 +591,16 @@ class EvidenceConservingStreamPETRHead(StreamPETRHead):
             "gap_active",
             "gap_age",
             "reacquisition_consumed",
+            "memory_isolation_mask",
+            "reacquisition_candidate_mask",
+            "pending_reacquisition_mask",
+            "confirmation_ready_mask",
+            "confirmed_reacquisition_mask",
+            "rejected_reacquisition_mask",
+            "pending_runtime_id",
+            "pending_rejected_count",
+            "pending_expired_count",
+            "active_pending_count",
         )
         self._last_evidence_diagnostics = {
             key: query_state[key].detach().cpu()
@@ -543,6 +718,19 @@ class EvidenceConservingStreamPETRHead(StreamPETRHead):
             class_confidence,
             policy_ranking_score,
         )
+        confirmed_mask = query_state.get(
+            "confirmed_reacquisition_mask",
+            torch.zeros_like(ranking_score, dtype=torch.bool),
+        )
+        if confirmed_mask.any():
+            admission_priority = ranking_score.detach().amax(
+                dim=1, keepdim=True
+            ) + 1.0
+            ranking_score = torch.where(
+                confirmed_mask,
+                admission_priority.expand_as(ranking_score),
+                ranking_score,
+            )
         k = min(self.topk_proposals, ranking_score.shape[1])
         topk_indexes = torch.topk(
             ranking_score.unsqueeze(-1), k, dim=1
@@ -576,6 +764,25 @@ class EvidenceConservingStreamPETRHead(StreamPETRHead):
                 policy_write_mask,
                 bootstrap_write_mask,
             )
+        )
+        isolation_mask = query_state.get(
+            "memory_isolation_mask",
+            torch.zeros_like(
+                query_state["write_mask"], dtype=torch.bool
+            ),
+        )
+        selected_isolation = topk_gather(
+            isolation_mask.unsqueeze(-1),
+            topk_indexes,
+        )
+        selected_confirmation = topk_gather(
+            confirmed_mask.unsqueeze(-1),
+            topk_indexes,
+        )
+        write_mask = torch.where(
+            selected_isolation,
+            selected_confirmation.to(write_mask.dtype),
+            write_mask,
         )
 
         # During warm-up, retain the official memory-writing behavior so the
@@ -625,17 +832,43 @@ class EvidenceConservingStreamPETRHead(StreamPETRHead):
                 | query_state["bootstrap_mask"]
             )
         )
-        if self.enable_reacquisition_diagnostics:
-            flat_topk = topk_indexes.squeeze(-1)
-            selected_valid = topk_gather(
-                valid_query_write_mask.unsqueeze(-1),
-                topk_indexes,
-            ).squeeze(-1).bool()
-            actual_memory_write = torch.zeros_like(
-                valid_query_write_mask,
-                dtype=torch.bool,
+        valid_query_write_mask = torch.where(
+            isolation_mask,
+            confirmed_mask,
+            valid_query_write_mask,
+        )
+        r2_actual_memory_write = torch.zeros_like(
+            valid_query_write_mask,
+            dtype=torch.bool,
+        )
+        flat_topk = topk_indexes.squeeze(-1)
+        selected_valid = topk_gather(
+            valid_query_write_mask.unsqueeze(-1),
+            topk_indexes,
+        ).squeeze(-1).bool()
+        r2_actual_memory_write.scatter_(1, flat_topk, selected_valid)
+        if self.enable_memory_isolation:
+            final_confirmed = confirmed_mask & r2_actual_memory_write
+            confirmed_ids = self.pending_reacquisition.finalize(
+                final_confirmed,
+                r2_tracker_state["slot_for_query"],
             )
-            actual_memory_write.scatter_(1, flat_topk, selected_valid)
+            query_state["confirmed_reacquisition_mask"] = final_confirmed
+            query_state["confirmed_runtime_id"] = confirmed_ids
+            query_state["actual_memory_write"] = r2_actual_memory_write
+            self._last_evidence_diagnostics.update(
+                {
+                    "confirmed_reacquisition_mask": (
+                        final_confirmed.detach().cpu()
+                    ),
+                    "confirmed_runtime_id": confirmed_ids.detach().cpu(),
+                    "actual_memory_write": (
+                        r2_actual_memory_write.detach().cpu()
+                    ),
+                }
+            )
+        if self.enable_reacquisition_diagnostics:
+            actual_memory_write = r2_actual_memory_write
             memory_slot = torch.full_like(
                 flat_topk.new_empty(
                     flat_topk.shape[0],
@@ -676,6 +909,46 @@ class EvidenceConservingStreamPETRHead(StreamPETRHead):
             self._last_evidence_summary["scene_reset_count"] = int(
                 self.evidence_ledger.scene_reset_count
             )
+            if self.enable_memory_isolation:
+                self._last_evidence_summary.update(
+                    {
+                        "reacquisition_candidate_count": int(
+                            query_state[
+                                "reacquisition_candidate_mask"
+                            ].sum().detach().cpu()
+                        ),
+                        "pending_reacquisition_count": int(
+                            query_state[
+                                "pending_reacquisition_mask"
+                            ].sum().detach().cpu()
+                        ),
+                        "confirmed_reacquisition_count": int(
+                            query_state[
+                                "confirmed_reacquisition_mask"
+                            ].sum().detach().cpu()
+                        ),
+                        "rejected_reacquisition_count": int(
+                            query_state[
+                                "pending_rejected_count"
+                            ].sum().detach().cpu()
+                        ),
+                        "expired_reacquisition_count": int(
+                            query_state[
+                                "pending_expired_count"
+                            ].sum().detach().cpu()
+                        ),
+                        "active_pending_count": int(
+                            query_state[
+                                "active_pending_count"
+                            ].sum().detach().cpu()
+                        ),
+                        "isolated_reacquisition_count": int(
+                            query_state[
+                                "memory_isolation_mask"
+                            ].sum().detach().cpu()
+                        ),
+                    }
+                )
         return query_state
 
     def forward(
@@ -1070,6 +1343,16 @@ class EvidenceConservingStreamPETRHead(StreamPETRHead):
         if not torch.is_tensor(reacquired) or not torch.is_tensor(bonus):
             return []
         trigger = reacquired.bool() | (bonus > 0)
+        for key in (
+            "reacquisition_candidate_mask",
+            "pending_reacquisition_mask",
+            "confirmation_ready_mask",
+            "confirmed_reacquisition_mask",
+            "rejected_reacquisition_mask",
+        ):
+            value = diagnostics.get(key)
+            if torch.is_tensor(value):
+                trigger = trigger | value.bool()
         fields = (
             "decoder_layer",
             "query_index",
@@ -1099,6 +1382,14 @@ class EvidenceConservingStreamPETRHead(StreamPETRHead):
             "memory_slot",
             "topk_selected",
             "is_reacquired",
+            "memory_isolation_mask",
+            "reacquisition_candidate_mask",
+            "pending_reacquisition_mask",
+            "confirmation_ready_mask",
+            "confirmed_reacquisition_mask",
+            "rejected_reacquisition_mask",
+            "pending_runtime_id",
+            "confirmed_runtime_id",
         )
         rows: List[Dict[str, Any]] = []
         for batch_index, query_index in trigger.nonzero(as_tuple=False).tolist():
