@@ -323,19 +323,28 @@ class PendingReacquisitionTracker(nn.Module):
                         and int(self.streak[batch, slot].item())
                         >= self.confirmation_frames
                     ):
-                        ready_mask[batch, query] = True
-                        confirmation_bonus[batch, query] = (
-                            self.proposed_bonus[batch, slot]
-                        )
-                        confirmation_prior_alpha[batch, query] = (
-                            self.prior_alpha[batch, slot]
-                        )
-                        confirmation_prior_beta[batch, query] = (
-                            self.prior_beta[batch, slot]
-                        )
-                        confirmation_prior_source[batch, query] = (
-                            self.prior_source_evidence[batch, slot]
-                        )
+                        stored_bonus = self.proposed_bonus[batch, slot]
+                        if bool(stored_bonus > 0):
+                            ready_mask[batch, query] = True
+                            confirmation_bonus[batch, query] = stored_bonus
+                            confirmation_prior_alpha[batch, query] = (
+                                self.prior_alpha[batch, slot]
+                            )
+                            confirmation_prior_beta[batch, query] = (
+                                self.prior_beta[batch, slot]
+                            )
+                            confirmation_prior_source[batch, query] = (
+                                self.prior_source_evidence[batch, slot]
+                            )
+                        else:
+                            # Confirmation is the one-shot authorization for
+                            # formal restoration evidence. An identity with no
+                            # positive stored budget cannot be "confirmed" and
+                            # silently write memory without its promised bonus.
+                            pending_mask[batch, query] = False
+                            rejected_query_mask[batch, query] = True
+                            self._reject_slot(batch, slot)
+                            rejected_count[batch] += 1
                     continue
 
                 # A geometrically nearby query that fails class/quality is a

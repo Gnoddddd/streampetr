@@ -36,6 +36,7 @@ def _step(
     velocity=((1.0, 0.0), (0.0, 0.0)),
     scores=(0.5, 0.5),
     reliability=(0.8, 0.8),
+    proposed_bonus=0.02,
     timestamp=0.0,
     scene=("scene-a",),
     reset=False,
@@ -63,7 +64,7 @@ def _step(
         score=torch.tensor([scores], dtype=dtype, device=device),
         reliability=torch.tensor([reliability], dtype=dtype, device=device),
         proposed_bonus=torch.full(
-            (1, queries), 0.02, dtype=dtype, device=device
+            (1, queries), proposed_bonus, dtype=dtype, device=device
         ),
         prior_alpha=torch.full(
             (1, queries), 2.0, dtype=dtype, device=device
@@ -106,6 +107,21 @@ def test_second_consistent_frame_confirms_after_query_reorder():
         second["confirmation_ready_mask"], second["slot_for_query"]
     )
     assert confirmed[0, 1].item() == runtime_id
+    assert not tracker.active.any()
+
+
+def test_consistent_candidate_without_positive_budget_is_rejected_not_confirmed():
+    tracker = _tracker()
+    _step(tracker, proposed_bonus=0.0)
+    second = _step(
+        tracker,
+        seed=(False, False),
+        centers=((0.5, 0.0, 0.0), (10.0, 0.0, 0.0)),
+        timestamp=0.5,
+    )
+    assert not second["confirmation_ready_mask"].any()
+    assert second["rejected_query_mask"][0, 0]
+    assert second["rejected_count"].item() == 1
     assert not tracker.active.any()
 
 
