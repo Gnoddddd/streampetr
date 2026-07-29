@@ -429,6 +429,31 @@ def _trigger_audit(nusc: NuScenes) -> Tuple[List[Dict], List[Dict]]:
             "write_mask": bool(trigger["write_mask"]),
             "memory_write": actual_memory_write,
             "memory_slot": int(trigger["memory_slot"]),
+            "topk_selected": bool(trigger.get("topk_selected", False)),
+            "candidate_event": bool(
+                trigger.get("reacquisition_candidate_mask", False)
+            ),
+            "pending_event": bool(
+                trigger.get("pending_reacquisition_mask", False)
+            ),
+            "confirmation_ready": bool(
+                trigger.get("confirmation_ready_mask", False)
+            ),
+            "confirmed_event": bool(
+                trigger.get("confirmed_reacquisition_mask", False)
+            ),
+            "rejected_event": bool(
+                trigger.get("rejected_reacquisition_mask", False)
+            ),
+            "memory_isolated": bool(
+                trigger.get("memory_isolation_mask", False)
+            ),
+            "pending_runtime_id": int(
+                trigger.get("pending_runtime_id", -1)
+            ),
+            "confirmed_runtime_id": int(
+                trigger.get("confirmed_runtime_id", -1)
+            ),
             "future_1_exists": future[1],
             "future_3_exists": future[3],
             "future_5_exists": future[5],
