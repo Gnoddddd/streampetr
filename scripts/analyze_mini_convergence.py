@@ -380,14 +380,18 @@ def training_rows():
                     "records": len(subset),
                     "loss_cls": mean("frame_0_loss_cls"),
                     "loss_bbox": mean("frame_0_loss_bbox"),
-                    "loss_ternary": mean("frame_0_loss_ternary"),
+                    "loss_ternary": mean("frame_0_loss_ternary")
+                    if experiment != "B0"
+                    else 0.0,
                     "loss_observability": 0.0,
                     "loss_evidence": 0.0,
                     "dn_loss": 0.0,
                     "auxiliary_scale": mean("auxiliary_loss_scale")
                     if experiment == "M1-Ramp"
                     else (1.0 if experiment == "M1" else 0.0),
-                    "lr": mean("lr"),
+                    # MMCV's JSON logger rounds 2.5e-6 to 0.0; preserve the
+                    # frozen config value rather than the lossy rendering.
+                    "lr": 2.5e-6,
                     "mean_iter_time_s": mean("time"),
                     "max_memory_mb": max(
                         (float(item.get("memory", 0)) for item in subset),
@@ -576,9 +580,64 @@ for experiment, conditions in decisions.items():
     )
 lines += [
     "",
+    "## Convergence curve",
+    "",
+    "| experiment | epoch | Clean NDS | fault-average NDS | loss_cls | "
+    "loss_bbox | loss_ternary |",
+    "|---|---:|---:|---:|---:|---:|---:|",
+]
+loss_lookup = {
+    (row["experiment"], int(row["epoch"])): row for row in losses
+}
+for experiment in EXPERIMENTS:
+    for epoch in EPOCHS:
+        clean_row = next(
+            row
+            for row in metric_rows
+            if row["experiment"] == experiment
+            and row["epoch"] == epoch
+            and row["protocol"] == "clean_no_corruption"
+        )
+        loss_row = loss_lookup[(experiment, epoch)]
+        lines.append(
+            f"| {experiment} | {epoch} | {clean_row['NDS']:.6f} | "
+            f"{clean_row['fault_average_NDS']:.6f} | "
+            f"{loss_row['loss_cls']:.4f} | {loss_row['loss_bbox']:.4f} | "
+            f"{loss_row['loss_ternary']:.4f} |"
+        )
+lines += [
+    "",
+    "## Epoch-12 candidate quality",
+    "",
+    "| experiment | protocol | GT recall@2m | RECOVER GT match | "
+    "false RECOVER write | recovery delay |",
+    "|---|---|---:|---:|---:|---:|",
+]
+for row in quality_rows:
+    if row["epoch"] != 12:
+        continue
+    def render(value):
+        return "N/A" if not math.isfinite(float(value)) else f"{float(value):.4f}"
+    lines.append(
+        f"| {row['experiment']} | {row['protocol']} | "
+        f"{render(row['gt_recall_at_2m'])} | "
+        f"{render(row['recover_gt_match_rate'])} | "
+        f"{render(row['false_memory_write_rate'])} | "
+        f"{render(row['recovery_delay'])} |"
+    )
+lines += [
+    "",
+    "M1-Ramp substantially improves M1 candidate quality, but its epoch-12 "
+    "GT recall remains below B0 on every protocol. Its Crash10 and Compound "
+    "NDS regressions exceed the allowed 0.002, so better RECOVER behavior is "
+    "not sufficient to establish an overall gain.",
+    "",
+    "## Decision",
+    "",
     "A pass permits quality-estimation work in the next task. If neither "
     "candidate passes, no module should be stacked; the Evidence3D core "
-    "training objective must be revised first.",
+    "training objective must be revised first. **Neither candidate passes, "
+    "therefore quality estimation is not authorized by this screen.**",
 ]
 (REPORT / "MINI_CONVERGENCE_REPORT.md").write_text(
     "\n".join(lines) + "\n", encoding="utf-8"
