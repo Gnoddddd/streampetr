@@ -1,0 +1,5 @@
+stage,candidate,iterations,loss_min,loss_max,loss_last,grad_norm_min,grad_norm_max,grad_norm_last,logged_gpu_memory_mib_max,conservation_residual_abs_max,conservation_violation_count,unsupported_growth_count,source_mass_violation_count,candidate_events,confirmed_events,finite,console_log
+smoke,r2_a,2,14.50614,16.83129,14.50614,13.84095,15.54322,13.84095,511.0,0.0,0,0,0,0,0,True,/home/research/research/evidence3d/outputs/stage2/s2_3_r2_formal/smoke/r2_a/console.log
+smoke,r2_b,2,14.50614,16.83129,14.50614,13.84095,15.54322,13.84095,511.0,0.0,0,0,0,0,0,True,/home/research/research/evidence3d/outputs/stage2/s2_3_r2_formal/smoke/r2_b/console.log
+formal_50iter,r2_a,50,13.09907,27.37699,13.13106,7.4475,15.56776,14.8019,555.0,0.0,0,0,0,22,0,True,/home/research/research/evidence3d/outputs/stage2/s2_3_r2_formal/debug_50/r2_a/console.log
+formal_50iter,r2_b,50,13.09907,27.37699,13.13106,7.4475,15.56776,14.8019,555.0,0.0,0,0,0,22,0,True,/home/research/research/evidence3d/outputs/stage2/s2_3_r2_formal/debug_50/r2_b/console.log

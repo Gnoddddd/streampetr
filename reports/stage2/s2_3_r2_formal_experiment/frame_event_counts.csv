@@ -1,0 +1,17 @@
+candidate,protocol,frames,reacquisition_candidate_count,pending_reacquisition_count,confirmed_reacquisition_count,rejected_reacquisition_count,expired_reacquisition_count,isolated_reacquisition_count
+r2_a_zero,clean,81,0,0,0,0,0,0
+r2_a_zero,camera_crash_5,81,12,14,0,12,0,26
+r2_a_zero,camera_crash_10,81,38,52,0,35,3,87
+r2_a_zero,compound,81,43,56,0,41,2,97
+r2_b_zero,clean,81,0,0,0,0,0,0
+r2_b_zero,camera_crash_5,81,12,12,0,12,0,24
+r2_b_zero,camera_crash_10,81,38,40,2,36,0,76
+r2_b_zero,compound,81,43,45,2,41,0,86
+r2_a_50iter,clean,81,0,0,0,0,0,0
+r2_a_50iter,camera_crash_5,81,12,14,0,12,0,26
+r2_a_50iter,camera_crash_10,81,37,52,0,34,3,86
+r2_a_50iter,compound,81,43,60,0,39,4,99
+r2_b_50iter,clean,81,0,0,0,0,0,0
+r2_b_50iter,camera_crash_5,81,12,12,0,12,0,24
+r2_b_50iter,camera_crash_10,81,37,40,3,34,0,74
+r2_b_50iter,compound,81,43,45,2,41,0,86

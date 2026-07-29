@@ -1,0 +1,5 @@
+candidate,conservation_residual_abs_max,conservation_violation_count,unsupported_growth_count,source_mass_residual_abs_max,source_mass_violation_count,keep_count,recover_count,defer_count
+r2_a_zero,2.86102294921875e-06,0,0,3.814697265625e-06,0,112577,2078,176945
+r2_b_zero,2.86102294921875e-06,0,0,3.814697265625e-06,0,112601,2082,176917
+r2_a_50iter,3.814697265625e-06,0,0,2.86102294921875e-06,0,114713,1981,174906
+r2_b_50iter,2.86102294921875e-06,0,0,3.814697265625e-06,0,114722,1986,174892

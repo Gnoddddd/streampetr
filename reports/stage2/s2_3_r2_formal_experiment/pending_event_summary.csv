@@ -1,0 +1,17 @@
+candidate,protocol,candidate_events,pending_events,rejected_events,expired_events,isolated_events,unconfirmed_memory_writes
+r2_a_zero,clean,0,0,0,0,0,0
+r2_a_zero,camera_crash_5,12,14,12,0,26,0
+r2_a_zero,camera_crash_10,38,52,35,3,87,0
+r2_a_zero,compound,43,56,41,2,97,0
+r2_b_zero,clean,0,0,0,0,0,0
+r2_b_zero,camera_crash_5,12,12,12,0,24,0
+r2_b_zero,camera_crash_10,38,40,36,0,76,0
+r2_b_zero,compound,43,45,41,0,86,0
+r2_a_50iter,clean,0,0,0,0,0,0
+r2_a_50iter,camera_crash_5,12,14,12,0,26,0
+r2_a_50iter,camera_crash_10,37,52,34,3,86,0
+r2_a_50iter,compound,43,60,39,4,99,0
+r2_b_50iter,clean,0,0,0,0,0,0
+r2_b_50iter,camera_crash_5,12,12,12,0,24,0
+r2_b_50iter,camera_crash_10,37,40,34,0,74,0
+r2_b_50iter,compound,43,45,41,0,86,0

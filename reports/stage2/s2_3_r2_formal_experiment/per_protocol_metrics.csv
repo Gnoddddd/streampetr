@@ -1,0 +1,51 @@
+candidate,protocol,mAP,NDS,source
+s2_2_stable,clean,0.4248,0.477,B0 is S2.2 with reacquisition disabled
+s2_2_stable,camera_crash_5,0.4183,0.473,B0 is S2.2 with reacquisition disabled
+s2_2_stable,camera_crash_10,0.411,0.4707,B0 is S2.2 with reacquisition disabled
+s2_2_stable,compound,0.3924,0.4573,B0 is S2.2 with reacquisition disabled
+s2_2_stable,fault_mean,0.40723333333333334,0.467,B0 is S2.2 with reacquisition disabled
+b0,clean,0.4248,0.477,existing diagnosis; reused without rerun
+b0,camera_crash_5,0.4183,0.473,existing diagnosis; reused without rerun
+b0,camera_crash_10,0.411,0.4707,existing diagnosis; reused without rerun
+b0,compound,0.3924,0.4573,existing diagnosis; reused without rerun
+b4_zero,clean,0.4248,0.477,existing diagnosis; reused without rerun
+b4_zero,camera_crash_5,0.4183,0.473,existing diagnosis; reused without rerun
+b4_zero,camera_crash_10,0.4121,0.4713,existing diagnosis; reused without rerun
+b4_zero,compound,0.3911,0.457,existing diagnosis; reused without rerun
+b6_zero,clean,0.424,0.4764,existing diagnosis; reused without rerun
+b6_zero,camera_crash_5,0.4181,0.4729,existing diagnosis; reused without rerun
+b6_zero,camera_crash_10,0.4133,0.4717,existing diagnosis; reused without rerun
+b6_zero,compound,0.3896,0.4551,existing diagnosis; reused without rerun
+b4_50iter,clean,0.4255,0.4772,existing diagnosis; reused without rerun
+b4_50iter,camera_crash_5,0.4191,0.4725,existing diagnosis; reused without rerun
+b4_50iter,camera_crash_10,0.412,0.471,existing diagnosis; reused without rerun
+b4_50iter,compound,0.3893,0.4549,existing diagnosis; reused without rerun
+b6_50iter,clean,0.4266,0.4778,existing diagnosis; reused without rerun
+b6_50iter,camera_crash_5,0.4192,0.4721,existing diagnosis; reused without rerun
+b6_50iter,camera_crash_10,0.4098,0.4697,existing diagnosis; reused without rerun
+b6_50iter,compound,0.3885,0.4546,existing diagnosis; reused without rerun
+b0,fault_mean,0.40723333333333334,0.467,existing diagnosis; reused without rerun
+b4_zero,fault_mean,0.4071666666666667,0.4671,existing diagnosis; reused without rerun
+b6_zero,fault_mean,0.40700000000000003,0.46656666666666663,existing diagnosis; reused without rerun
+b4_50iter,fault_mean,0.4068,0.46613333333333334,existing diagnosis; reused without rerun
+b6_50iter,fault_mean,0.4058333333333333,0.46546666666666664,existing diagnosis; reused without rerun
+r2_a_zero,clean,0.4247724932181818,0.4770300703196476,S2.3-R2 formal evaluation
+r2_a_zero,camera_crash_5,0.41677289684982843,0.4722711998150432,S2.3-R2 formal evaluation
+r2_a_zero,camera_crash_10,0.41103591625708547,0.47047030435678494,S2.3-R2 formal evaluation
+r2_a_zero,compound,0.39047443721983643,0.4561132686206619,S2.3-R2 formal evaluation
+r2_a_zero,fault_mean,0.4060944167755835,0.46628492426416335,arithmetic mean of three fixed fault protocols
+r2_b_zero,clean,0.4247724932181818,0.4770300703196476,S2.3-R2 formal evaluation
+r2_b_zero,camera_crash_5,0.41503280164164885,0.47099585485155304,S2.3-R2 formal evaluation
+r2_b_zero,camera_crash_10,0.412413213980768,0.47163106417436074,S2.3-R2 formal evaluation
+r2_b_zero,compound,0.3913298575054764,0.45725841239712095,S2.3-R2 formal evaluation
+r2_b_zero,fault_mean,0.40625862437596444,0.4666284438076782,arithmetic mean of three fixed fault protocols
+r2_a_50iter,clean,0.4279850701348459,0.4787519012425193,S2.3-R2 formal evaluation
+r2_a_50iter,camera_crash_5,0.4179798275228599,0.4717466582083437,S2.3-R2 formal evaluation
+r2_a_50iter,camera_crash_10,0.41261424422491977,0.47111908199971053,S2.3-R2 formal evaluation
+r2_a_50iter,compound,0.389519793679029,0.4559153763560214,S2.3-R2 formal evaluation
+r2_a_50iter,fault_mean,0.40670462180893624,0.46626037218802524,arithmetic mean of three fixed fault protocols
+r2_b_50iter,clean,0.4279850701348459,0.4787519012425193,S2.3-R2 formal evaluation
+r2_b_50iter,camera_crash_5,0.41816649032267,0.47163392563374895,S2.3-R2 formal evaluation
+r2_b_50iter,camera_crash_10,0.41205669379369836,0.4709805219945042,S2.3-R2 formal evaluation
+r2_b_50iter,compound,0.38946239538253175,0.4548489523981429,S2.3-R2 formal evaluation
+r2_b_50iter,fault_mean,0.4065618598329667,0.46582113334213204,arithmetic mean of three fixed fault protocols

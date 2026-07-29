@@ -1,0 +1,5 @@
+stage,candidate,checkpoint,bytes,state_dict_keys,runtime_state_keys,runtime_key_names,nonfinite_tensor_keys,nonfinite_key_names,pass
+smoke,r2_a,/home/research/research/evidence3d/outputs/stage2/s2_3_r2_formal/smoke/r2_a/iter_2.pth,159785413,630,0,,0,,True
+smoke,r2_b,/home/research/research/evidence3d/outputs/stage2/s2_3_r2_formal/smoke/r2_b/iter_2.pth,159785413,630,0,,0,,True
+formal_50iter,r2_a,/home/research/research/evidence3d/outputs/stage2/s2_3_r2_formal/debug_50/r2_a/iter_50.pth,159785413,630,0,,0,,True
+formal_50iter,r2_b,/home/research/research/evidence3d/outputs/stage2/s2_3_r2_formal/debug_50/r2_b/iter_50.pth,159785413,630,0,,0,,True

@@ -59,6 +59,26 @@ def write_csv(name: str, rows: Sequence[Dict[str, Any]]) -> None:
     diagnosis._write_csv(REPORT_ROOT / name, rows)
 
 
+def write_case_csv(
+    name: str,
+    rows: Sequence[Dict[str, Any]],
+    schema_source: Sequence[Dict[str, Any]],
+) -> None:
+    if rows:
+        write_csv(name, rows)
+        return
+    if not schema_source:
+        raise RuntimeError(f"cannot infer empty-case schema for {name}")
+    path = REPORT_ROOT / name
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=list(schema_source[0].keys()),
+            lineterminator="\n",
+        )
+        writer.writeheader()
+
+
 def trace_path(candidate: str, protocol: str) -> Path:
     paths = list(
         (
@@ -211,6 +231,7 @@ def aggregate_trigger_rows(
         for protocol in PROTOCOLS:
             subset = groups[candidate, protocol]
             candidates = [row for row in subset if row["candidate_event"]]
+            candidate_tp = sum(bool(row["tp"]) for row in candidates)
             pending_rows = [row for row in subset if row["pending_event"]]
             confirmed = [row for row in subset if row["confirmed_event"]]
             rejected = [row for row in subset if row["rejected_event"]]
@@ -233,6 +254,13 @@ def aggregate_trigger_rows(
                     "protocol": protocol,
                     "trigger_records": len(subset),
                     "candidate_events": len(candidates),
+                    "candidate_tp": candidate_tp,
+                    "candidate_fp": len(candidates) - candidate_tp,
+                    "candidate_false_recovery_ratio": (
+                        (len(candidates) - candidate_tp) / len(candidates)
+                        if candidates
+                        else 0.0
+                    ),
                     "pending_events": len(pending_rows),
                     "confirmed_events": len(confirmed),
                     "rejected_events": len(rejected),
@@ -700,8 +728,10 @@ def candidate_rows(
         ev = next(row for row in evidence if row["candidate"] == candidate)
         confirmed = sum(row["confirmed_events"] for row in fault_alignment)
         confirmed_tp = sum(row["confirmed_tp"] for row in fault_alignment)
-        trigger_count = sum(row["trigger_records"] for row in fault_alignment)
-        false_count = sum(row["fp"] for row in fault_alignment)
+        trigger_count = sum(
+            row["candidate_events"] for row in fault_alignment
+        )
+        false_count = sum(row["candidate_fp"] for row in fault_alignment)
         wrong_writes = sum(
             row["wrong_query_memory_writes"] for row in fault_memory
         )
@@ -1054,6 +1084,19 @@ third candidate was accessed. Thresholds were frozen in
 The fixed B0 reference is Clean **0.424800/0.477000** and fault mean
 **0.407233/0.467000**.
 
+Historical reused comparisons (Clean; fault mean mAP/NDS) are: S2.2/B0
+**0.424800/0.477000; 0.407233/0.467000**, B4 zero-shot
+**0.424800/0.477000; 0.407167/0.467100**, B6 zero-shot
+**0.424000/0.476400; 0.407000/0.466567**, B4 50iter
+**0.425500/0.477200; 0.406800/0.466133**, and B6 50iter
+**0.426600/0.477800; 0.405833/0.465467**.
+
+Both R2 candidates use confirmation frames=2, pending max age=3, class
+consistency=true, center/motion thresholds=2.0 m, minimum score=0.075,
+minimum reliability=0.65, and pending memory write=false. R2-A disables
+confirmation; R2-B enables it. All other model, optimizer, FP16, data, seed,
+and training settings are identical.
+
 ## Pre-registered hard gates
 
 {chr(10).join(sections)}
@@ -1158,11 +1201,14 @@ def main() -> None:
     write_csv("confirmation_event_summary.csv", confirmation)
     write_csv("gt_alignment_summary.csv", alignment)
     write_csv("memory_isolation_summary.csv", memory)
-    write_csv("memory_pollution_summary.csv", pollution)
+    write_csv("memory_pollution_summary.csv", memory)
+    write_case_csv("memory_pollution_cases.csv", pollution, trigger_rows)
     write_csv("newly_recovered_gt_cases.csv", new_cases)
     write_csv("lost_gt_cases.csv", lost_cases)
     write_csv("false_recovery_cases.csv", false_rows)
-    write_csv("false_confirmed_cases.csv", false_confirmed)
+    write_case_csv(
+        "false_confirmed_cases.csv", false_confirmed, trigger_rows
+    )
     write_csv(
         "cross_candidate_deduplicated_events.csv",
         deduplicated_events(trigger_rows),

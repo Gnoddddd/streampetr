@@ -1,0 +1,14 @@
+candidate,protocol,status,detail
+b0,clean,pass,243 tensors + 81 box objects; max_abs=0
+b0,camera_crash_5,pass,243 tensors + 81 box objects; max_abs=0
+b0,camera_crash_10,pass,243 tensors + 81 box objects; max_abs=0
+b0,compound,pass,243 tensors + 81 box objects; max_abs=0
+b4,clean,pass,243 tensors + 81 box objects; max_abs=0
+b4,camera_crash_5,pass,243 tensors + 81 box objects; max_abs=0
+b4,camera_crash_10,pass,243 tensors + 81 box objects; max_abs=0
+b4,compound,pass,243 tensors + 81 box objects; max_abs=0
+b6,clean,pass,243 tensors + 81 box objects; max_abs=0
+b6,camera_crash_5,pass,243 tensors + 81 box objects; max_abs=0
+b6,camera_crash_10,pass,243 tensors + 81 box objects; max_abs=0
+b6,compound,pass,243 tensors + 81 box objects; max_abs=0
+internal_state_contract,pytest,pass,"classification/box/final prediction, alpha/beta, evidence, source, action, write mask, propagated query, memory, Top-K, conservation residual and source mass are tensor invariant"

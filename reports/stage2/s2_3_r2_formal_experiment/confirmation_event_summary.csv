@@ -1,0 +1,17 @@
+candidate,protocol,confirmation_ready,confirmed,confirmed_tp,confirmed_fp,confirmed_precision,false_confirmed_ratio,confirmed_bonus_count,confirmed_memory_writes
+r2_a_zero,clean,0,0,0,0,0.0,0.0,0,0
+r2_a_zero,camera_crash_5,0,0,0,0,0.0,0.0,0,0
+r2_a_zero,camera_crash_10,0,0,0,0,0.0,0.0,0,0
+r2_a_zero,compound,0,0,0,0,0.0,0.0,0,0
+r2_b_zero,clean,0,0,0,0,0.0,0.0,0,0
+r2_b_zero,camera_crash_5,0,0,0,0,0.0,0.0,0,0
+r2_b_zero,camera_crash_10,2,2,2,0,1.0,0.0,2,2
+r2_b_zero,compound,2,2,2,0,1.0,0.0,2,2
+r2_a_50iter,clean,0,0,0,0,0.0,0.0,0,0
+r2_a_50iter,camera_crash_5,0,0,0,0,0.0,0.0,0,0
+r2_a_50iter,camera_crash_10,0,0,0,0,0.0,0.0,0,0
+r2_a_50iter,compound,0,0,0,0,0.0,0.0,0,0
+r2_b_50iter,clean,0,0,0,0,0.0,0.0,0,0
+r2_b_50iter,camera_crash_5,0,0,0,0,0.0,0.0,0,0
+r2_b_50iter,camera_crash_10,3,3,3,0,1.0,0.0,3,3
+r2_b_50iter,compound,2,2,2,0,1.0,0.0,2,2

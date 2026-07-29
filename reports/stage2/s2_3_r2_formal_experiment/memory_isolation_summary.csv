@@ -1,0 +1,17 @@
+candidate,protocol,unconfirmed_events,successfully_isolated,isolation_success_ratio,correct_query_memory_writes,wrong_query_memory_writes,wrong_write_reduction_vs_b0,pre_confirmation_wrong_writes,confirmed_write_consistent,confirmed_write_consistency_ratio,polluting_writes,pollution_duration_total,pollution_duration_mean
+r2_a_zero,clean,0,0,1.0,0,0,1.0,0,0,1.0,0,0,0.0
+r2_a_zero,camera_crash_5,26,26,1.0,0,0,1.0,0,26,1.0,0,0,0.0
+r2_a_zero,camera_crash_10,87,87,1.0,0,0,1.0,0,87,1.0,0,0,0.0
+r2_a_zero,compound,97,97,1.0,0,0,1.0,0,97,1.0,0,0,0.0
+r2_b_zero,clean,0,0,1.0,0,0,1.0,0,0,1.0,0,0,0.0
+r2_b_zero,camera_crash_5,24,24,1.0,0,0,1.0,0,24,1.0,0,0,0.0
+r2_b_zero,camera_crash_10,74,74,1.0,2,0,1.0,0,76,1.0,0,0,0.0
+r2_b_zero,compound,84,84,1.0,2,0,1.0,0,86,1.0,0,0,0.0
+r2_a_50iter,clean,0,0,1.0,0,0,1.0,0,0,1.0,0,0,0.0
+r2_a_50iter,camera_crash_5,26,26,1.0,0,0,1.0,0,26,1.0,0,0,0.0
+r2_a_50iter,camera_crash_10,86,86,1.0,0,0,1.0,0,86,1.0,0,0,0.0
+r2_a_50iter,compound,99,99,1.0,0,0,1.0,0,99,1.0,0,0,0.0
+r2_b_50iter,clean,0,0,1.0,0,0,1.0,0,0,1.0,0,0,0.0
+r2_b_50iter,camera_crash_5,24,24,1.0,0,0,1.0,0,24,1.0,0,0,0.0
+r2_b_50iter,camera_crash_10,71,71,1.0,3,0,1.0,0,74,1.0,0,0,0.0
+r2_b_50iter,compound,84,84,1.0,2,0,1.0,0,86,1.0,0,0,0.0
