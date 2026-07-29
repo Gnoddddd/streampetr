@@ -29,15 +29,15 @@ for entry in "${pairs[@]}"; do
       fi
       target="$out_root/$pair/$protocol/$variant"
       mkdir -p "$target"
+      prediction_file="$root/$target/predictions.pkl"
       python tools/evaluate.py \
         --config "$config" \
         --checkpoint "$checkpoint" \
         --protocol "$protocol_file" \
         --eval bbox \
         -- \
-        --out "$target/predictions.pkl" \
+        --out "$prediction_file" \
         2>&1 | tee "$target/evaluation.log"
     done
   done
 done
-
