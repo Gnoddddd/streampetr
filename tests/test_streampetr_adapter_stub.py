@@ -160,6 +160,7 @@ def test_adapter_memory_update_contract(monkeypatch):
         num_cameras=2,
         evidence_warmup_steps=0,
         enable_source_ledger=True,
+        enable_reacquisition_diagnostics=True,
         source_camera_names=("CAM_LEFT", "CAM_RIGHT"),
         temporal_update_cfg={"gamma": 0.9, "evidence_scale": 2.0},
     )
@@ -210,8 +211,114 @@ def test_adapter_memory_update_contract(monkeypatch):
     diagnostics = head.get_last_evidence_diagnostics()
     assert diagnostics["source_camera_names"] == ("CAM_LEFT", "CAM_RIGHT")
     assert diagnostics["source_evidence"].shape == (batch, queries, 2)
+    assert diagnostics["query_index"].shape == (batch, queries)
+    assert diagnostics["query_source"].tolist() == [[0, 0, 0, 0, 1, 1]]
+    assert diagnostics["decoder_layer"].unique().item() == layers - 1
+    assert diagnostics["previous_action"].shape == (batch, queries)
+    assert diagnostics["previous_source_vector"].shape == (
+        batch,
+        queries,
+        2,
+    )
+    assert diagnostics["previous_center"].shape == (batch, queries, 3)
+    assert diagnostics["current_center_global"].shape == (
+        batch,
+        queries,
+        3,
+    )
+    assert diagnostics["velocity_extrapolated_center"].shape == (
+        batch,
+        queries,
+        3,
+    )
+    assert diagnostics["velocity_global"].shape == (batch, queries, 2)
+    assert diagnostics["predicted_class"].shape == (batch, queries)
+    assert diagnostics["predicted_score"].shape == (batch, queries)
+    assert diagnostics["actual_memory_write"].shape == (batch, queries)
+    assert diagnostics["actual_memory_write"].sum().item() == 3
+    assert diagnostics["topk_selected"].sum().item() == 3
+    assert (diagnostics["memory_slot"] >= 0).sum().item() == 3
+    assert head.get_last_reacquisition_trigger_diagnostics() == []
+    head._last_evidence_diagnostics["is_reacquired"][0, 0] = True
+    trigger_rows = head.get_last_reacquisition_trigger_diagnostics()
+    assert len(trigger_rows) == 1
+    assert trigger_rows[0]["query_index"] == 0
+    assert trigger_rows[0]["query_source"] == 0
+    assert trigger_rows[0]["current_center_global"].shape == (3,)
+    for key, value in tuple(head._last_evidence_diagnostics.items()):
+        if torch.is_tensor(value) and value.is_floating_point():
+            head._last_evidence_diagnostics[key] = value.half()
+    half_rows = head.get_last_reacquisition_trigger_diagnostics()
+    assert len(half_rows) == 1
+    assert torch.isfinite(half_rows[0]["current_center_global"]).all()
+    assert not any(
+        "diagnostic" in key or "_last_evidence" in key
+        for key in head.state_dict()
+    )
+    checkpoint = {"state_dict": head.state_dict()}
+    assert not any(
+        "diagnostic" in key or "_last_evidence" in key
+        for key in checkpoint["state_dict"]
+    )
     assert torch.all(state["write_mask"])
+
+    # The observer is downstream of all decision and memory tensors. Running
+    # the same update with it disabled must therefore be bit-for-bit equal.
+    head_without_diagnostics = adapter.EvidenceConservingStreamPETRHead(
+        num_classes=3,
+        in_channels=8,
+        embed_dims=8,
+        num_pred=2,
+        num_query=4,
+        memory_len=6,
+        topk_proposals=3,
+        num_propagated=2,
+        num_cameras=2,
+        evidence_warmup_steps=0,
+        enable_source_ledger=True,
+        source_camera_names=("CAM_LEFT", "CAM_RIGHT"),
+        temporal_update_cfg={"gamma": 0.9, "evidence_scale": 2.0},
+    )
+    head_without_diagnostics.pre_update_memory(data)
+    state_without_diagnostics = (
+        head_without_diagnostics._update_memory_with_evidence(
+            data,
+            rec_pose,
+            all_cls_scores,
+            all_bbox_preds,
+            outs_dec,
+            None,
+            ternary,
+            observation,
+        )
+    )
+    for key in (
+        "alpha",
+        "beta",
+        "conservation_residual",
+        "source_evidence",
+        "source_mass_residual",
+        "action",
+        "write_mask",
+    ):
+        assert torch.equal(state[key], state_without_diagnostics[key])
+    for key in (
+        "memory_embedding",
+        "memory_reference_point",
+        "memory_timestamp",
+        "memory_egopose",
+        "memory_velo",
+    ):
+        assert torch.equal(
+            getattr(head, key),
+            getattr(head_without_diagnostics, key),
+        )
+    assert "query_index" not in (
+        head_without_diagnostics.get_last_evidence_diagnostics()
+    )
+
     head.reset_memory()
+    assert head.get_last_evidence_diagnostics() == {}
     for name in head.evidence_ledger._STATE_NAMES:
         assert getattr(head.evidence_ledger, name) is None
 
