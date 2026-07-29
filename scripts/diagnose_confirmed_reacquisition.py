@@ -574,7 +574,9 @@ def _historical_source_gate_rows() -> List[Dict[str, Any]]:
                     positive_source += int((values > 1e-8).sum())
                     zero_source += int((values <= 1e-8).sum())
                     positive_budget += int((budget[reacquired] > 0).sum())
-                    positive_bonus += int((bonus[reacquired] > 0).sum())
+                    # Tiny sub-1e-8 products are numerical residue, not an
+                    # effective evidence addition at float32 scale.
+                    positive_bonus += int((bonus[reacquired] > 1e-8).sum())
                     source_sum += float(values.sum())
             rows.append({
                 "candidate": candidate + "_historical_source_gated",
