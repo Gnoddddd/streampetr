@@ -514,6 +514,28 @@ class EvidenceConservingStreamPETRHead(StreamPETRHead):
                 | query_state["bootstrap_mask"]
             )
         )
+        # Read-only evaluation diagnostics. These tensors are detached CPU
+        # copies and never participate in prediction or memory updates.
+        selected_query_mask = torch.zeros_like(
+            query_state["write_mask"], dtype=torch.bool
+        )
+        selected_query_mask.scatter_(
+            1, topk_indexes.squeeze(-1), True
+        )
+        self._last_evidence_diagnostics.update(
+            {
+                "reference_geometry": query_state[
+                    "reference_geometry"
+                ].detach().cpu(),
+                "reference_class_distribution": query_state[
+                    "reference_class_distribution"
+                ].detach().cpu(),
+                "topk_selected_mask": selected_query_mask.detach().cpu(),
+                "actual_memory_write_mask": (
+                    selected_query_mask & valid_query_write_mask
+                ).detach().cpu(),
+            }
+        )
         self.evidence_ledger.commit_topk(
             query_state,
             topk_indexes,
