@@ -1,0 +1,2 @@
+checkpoint,bytes,state_dict_keys,legacy_load_completed_inference_runs,disabled_load_completed_inference_runs,correlation_config_key_count,correlation_config_keys,switch_state_key_count,runtime_state_key_count,runtime_state_keys,safe
+/home/research/research/evidence3d/outputs/stage2/s2_2_source_ledger_debug_50/iter_50.pth,159783623,629,4,4,1,pts_bbox_head.observability_head.camera_correlation,0,0,,True
