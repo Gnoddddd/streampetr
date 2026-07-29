@@ -455,6 +455,17 @@ class EvidenceConservingStreamPETRHead(StreamPETRHead):
                 data["ego_pose"],
                 reverse=False,
             )
+            velocity_3d = torch.cat(
+                (
+                    rec_bbox[..., -2:],
+                    torch.zeros_like(rec_bbox[..., -2:-1]),
+                ),
+                dim=-1,
+            )
+            velocity_global = torch.matmul(
+                data["ego_pose"][..., :3, :3].unsqueeze(1),
+                velocity_3d.unsqueeze(-1),
+            ).squeeze(-1)[..., :2]
             detailed_diagnostics = {
                 "query_index": query_index,
                 "query_source": query_source,
@@ -471,6 +482,7 @@ class EvidenceConservingStreamPETRHead(StreamPETRHead):
                 "current_center": rec_bbox[..., :3],
                 "current_center_global": current_center_global,
                 "velocity": rec_bbox[..., -2:],
+                "velocity_global": velocity_global,
                 "velocity_extrapolated_center": query_state[
                     "predicted_center"
                 ],
@@ -1047,3 +1059,59 @@ class EvidenceConservingStreamPETRHead(StreamPETRHead):
             key: value.clone() if torch.is_tensor(value) else copy.deepcopy(value)
             for key, value in self._last_evidence_diagnostics.items()
         }
+
+    def get_last_reacquisition_trigger_diagnostics(self) -> List[Dict[str, Any]]:
+        """Return compact, detached rows for reacquisition/restoration events."""
+        if not self.enable_reacquisition_diagnostics:
+            return []
+        diagnostics = self._last_evidence_diagnostics
+        reacquired = diagnostics.get("is_reacquired")
+        bonus = diagnostics.get("restoration_bonus")
+        if not torch.is_tensor(reacquired) or not torch.is_tensor(bonus):
+            return []
+        trigger = reacquired.bool() | (bonus > 0)
+        fields = (
+            "decoder_layer",
+            "query_index",
+            "query_source",
+            "action",
+            "previous_action",
+            "gap_age",
+            "base_positive_evidence",
+            "lost_strength",
+            "restoration_budget",
+            "restoration_bonus",
+            "motion_consistency",
+            "source_recovery",
+            "current_reliability",
+            "previous_source_vector",
+            "current_source_vector",
+            "previous_center",
+            "current_center",
+            "current_center_global",
+            "velocity",
+            "velocity_global",
+            "velocity_extrapolated_center",
+            "predicted_class",
+            "predicted_score",
+            "write_mask",
+            "actual_memory_write",
+            "memory_slot",
+            "topk_selected",
+            "is_reacquired",
+        )
+        rows: List[Dict[str, Any]] = []
+        for batch_index, query_index in trigger.nonzero(as_tuple=False).tolist():
+            row: Dict[str, Any] = {"batch_element": int(batch_index)}
+            for field in fields:
+                value = diagnostics.get(field)
+                if not torch.is_tensor(value):
+                    continue
+                item = value[batch_index, query_index]
+                row[field] = (
+                    item.item()
+                    if item.ndim == 0
+                    else item.clone()
+                )
+            rows.append(row)
+        return rows

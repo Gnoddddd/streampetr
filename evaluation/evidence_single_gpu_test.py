@@ -47,6 +47,22 @@ def _to_jsonable(value: Any) -> Any:
     return str(value)
 
 
+def _find_first_scalar(value: Any) -> Optional[float]:
+    """Unwrap DataContainer/list/tensor nesting and return one scalar."""
+    if torch.is_tensor(value):
+        return float(value.reshape(-1)[0].detach().cpu()) if value.numel() else None
+    if hasattr(value, "data"):
+        return _find_first_scalar(value.data)
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            found = _find_first_scalar(item)
+            if found is not None:
+                return found
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
 def _resolve_trace_path(trace_root: str) -> Path:
     root = Path(trace_root).expanduser()
 
@@ -111,6 +127,7 @@ def single_gpu_test_with_evidence_trace(
 
             summary = {}
             diagnostics = {}
+            reacquisition_triggers = []
 
             if head is not None:
                 if hasattr(head, "get_last_evidence_summary"):
@@ -120,18 +137,37 @@ def single_gpu_test_with_evidence_trace(
                     diagnostics = (
                         head.get_last_evidence_diagnostics()
                     )
+                if (
+                    getattr(head, "enable_reacquisition_diagnostics", False)
+                    and hasattr(
+                        head,
+                        "get_last_reacquisition_trigger_diagnostics",
+                    )
+                ):
+                    reacquisition_triggers = (
+                        head.get_last_reacquisition_trigger_diagnostics()
+                    )
+                    # The compact trigger rows replace multi-megabyte full
+                    # query dumps only for this explicitly enabled observer.
+                    diagnostics = {}
 
             meta = _find_first_dict(data.get("img_metas", {})) or {}
 
+            timestamp = _find_first_scalar(data.get("timestamp"))
+            if timestamp is None:
+                timestamp = float(meta.get("timestamp", 0.0))
             record = {
                 "batch_index": int(batch_index),
                 "sample_idx": str(meta.get("sample_idx", "")),
                 "scene_token": str(meta.get("scene_token", "")),
                 "frame_idx": int(meta.get("frame_idx", -1)),
-                "timestamp": float(meta.get("timestamp", 0.0)),
+                "timestamp": timestamp,
                 "protocol_file": protocol_file,
                 "summary": _to_jsonable(summary),
                 "diagnostics": _to_jsonable(diagnostics),
+                "reacquisition_triggers": _to_jsonable(
+                    reacquisition_triggers
+                ),
             }
 
             handle.write(
