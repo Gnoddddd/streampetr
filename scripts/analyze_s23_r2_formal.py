@@ -260,6 +260,10 @@ def aggregate_trigger_rows(
                         if confirmed
                         else 0.0
                     ),
+                    "confirmed_new_gt_matches_vs_b0": sum(
+                        bool(row["improved_gt_match_vs_b0"])
+                        for row in confirmed
+                    ),
                     "false_confirmed_ratio": (
                         (len(confirmed) - confirmed_tp) / len(confirmed)
                         if confirmed
@@ -717,6 +721,10 @@ def candidate_rows(
                 "confirmed_precision": (
                     confirmed_tp / confirmed if confirmed else 0.0
                 ),
+                "confirmed_new_gt_matches_vs_b0": sum(
+                    row["confirmed_new_gt_matches_vs_b0"]
+                    for row in fault_alignment
+                ),
                 "false_confirmed_ratio": (
                     (confirmed - confirmed_tp) / confirmed
                     if confirmed
@@ -806,6 +814,10 @@ def manifest_rows() -> List[Dict[str, Any]]:
             {
                 "candidate": candidate,
                 "git_commit": head,
+                "training_git_commit": (
+                    "3936c8d" if iterations else "not_applicable"
+                ),
+                "evaluation_git_commit": head,
                 "config": config,
                 "initial_checkpoint": str(checkpoint),
                 "seed": 2026,
@@ -826,6 +838,128 @@ def manifest_rows() -> List[Dict[str, Any]]:
                 "success": output_checkpoint.exists(),
             }
         )
+    return rows
+
+
+def run_summary_rows() -> List[Dict[str, Any]]:
+    rows = []
+    roots = (
+        ("smoke", ROOT / "outputs/stage2/s2_3_r2_formal/smoke", 2),
+        ("formal_50iter", TRAIN_ROOT, 50),
+    )
+    for stage, base, expected_iterations in roots:
+        for candidate in ("r2_a", "r2_b"):
+            directory = base / candidate
+            log_paths = sorted(directory.glob("*.log.json"))
+            if len(log_paths) != 1:
+                raise RuntimeError(f"expected one JSON log in {directory}")
+            iteration_rows = []
+            with log_paths[0].open(encoding="utf-8") as handle:
+                for line in handle:
+                    try:
+                        item = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if "iter" in item:
+                        iteration_rows.append(item)
+            if len(iteration_rows) != expected_iterations:
+                raise RuntimeError(
+                    f"{directory}: expected {expected_iterations} iterations"
+                )
+
+            def values(key: str) -> List[float]:
+                return [
+                    float(item[key])
+                    for item in iteration_rows
+                    if key in item
+                ]
+
+            loss = values("loss")
+            grad = values("grad_norm")
+            memory = values("memory")
+            rows.append(
+                {
+                    "stage": stage,
+                    "candidate": candidate,
+                    "iterations": len(iteration_rows),
+                    "loss_min": min(loss),
+                    "loss_max": max(loss),
+                    "loss_last": loss[-1],
+                    "grad_norm_min": min(grad),
+                    "grad_norm_max": max(grad),
+                    "grad_norm_last": grad[-1],
+                    "logged_gpu_memory_mib_max": max(memory),
+                    "conservation_residual_abs_max": max(
+                        values("conservation_residual_abs_max")
+                    ),
+                    "conservation_violation_count": int(
+                        sum(values("conservation_violation_count"))
+                    ),
+                    "unsupported_growth_count": int(
+                        sum(values("unsupported_growth_count"))
+                    ),
+                    "source_mass_violation_count": int(
+                        sum(values("source_mass_violation_count"))
+                    ),
+                    "candidate_events": int(
+                        sum(values("reacquisition_candidate_count"))
+                    ),
+                    "confirmed_events": int(
+                        sum(values("confirmed_reacquisition_count"))
+                    ),
+                    "finite": all(
+                        math.isfinite(value)
+                        for value in loss + grad + memory
+                    ),
+                    "console_log": str(directory / "console.log"),
+                }
+            )
+    return rows
+
+
+def checkpoint_safety_rows() -> List[Dict[str, Any]]:
+    rows = []
+    roots = (
+        ("smoke", ROOT / "outputs/stage2/s2_3_r2_formal/smoke", 2),
+        ("formal_50iter", TRAIN_ROOT, 50),
+    )
+    forbidden = (
+        "pending_reacquisition",
+        "runtime_id",
+        "scene_token",
+        "diagnostic",
+        "_last_evidence",
+    )
+    for stage, base, iteration in roots:
+        for candidate in ("r2_a", "r2_b"):
+            path = base / candidate / f"iter_{iteration}.pth"
+            state = torch.load(path, map_location="cpu")["state_dict"]
+            runtime_keys = [
+                key
+                for key in state
+                if any(token in key for token in forbidden)
+            ]
+            nonfinite = [
+                key
+                for key, value in state.items()
+                if torch.is_tensor(value)
+                and value.is_floating_point()
+                and not torch.isfinite(value).all()
+            ]
+            rows.append(
+                {
+                    "stage": stage,
+                    "candidate": candidate,
+                    "checkpoint": str(path),
+                    "bytes": path.stat().st_size,
+                    "state_dict_keys": len(state),
+                    "runtime_state_keys": len(runtime_keys),
+                    "runtime_key_names": "|".join(runtime_keys),
+                    "nonfinite_tensor_keys": len(nonfinite),
+                    "nonfinite_key_names": "|".join(nonfinite),
+                    "pass": not runtime_keys and not nonfinite,
+                }
+            )
     return rows
 
 
@@ -929,7 +1063,8 @@ better formal candidate because its fault mean is higher than R2-B and it
 eliminates unconfirmed memory writes without confirmation delay, but it still
 falls below B0 and passes only one of three fault protocols. R2-B sharply
 reduces false formal writes, yet its stricter two-frame admission does not
-recover B0-missed objects and loses more Compound performance.
+directly recover any B0-missed object (confirmed-event delta=0) and loses more
+Compound performance.
 
 ## GT, memory, and interval interpretation
 
@@ -949,7 +1084,7 @@ it would trade precision for the original contamination failure.
 
 ## Engineering result
 
-Full pytest: **140 passed, 7 warnings**. Disabled-path replay: **12/12 exact**,
+Full pytest: **141 passed, 7 warnings**. Disabled-path replay: **12/12 exact**,
 each with 243 tensors and 81 box objects (`max_abs_diff=0`). Both smoke and
 both 50-iteration runs completed without NaN, Inf, OOM, or RuntimeError.
 Runtime pending buffers are non-persistent and absent from all inspected
@@ -1035,6 +1170,8 @@ def main() -> None:
     write_csv("evidence_summary.csv", evidence)
     write_csv("trigger_records.csv", trigger_rows)
     write_csv("frame_event_counts.csv", frame_counts)
+    write_csv("run_summary.csv", run_summary_rows())
+    write_csv("checkpoint_safety.csv", checkpoint_safety_rows())
     (REPORT_ROOT / "R2_FORMAL_EXPERIMENT_REPORT.md").write_text(
         report_text(candidates, intervals, evidence), encoding="utf-8"
     )
