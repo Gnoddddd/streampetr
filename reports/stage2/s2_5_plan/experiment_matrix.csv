@@ -1,0 +1,11 @@
+stage,candidate,baseline,core_difference,protocols,iterations,entry_condition,exit_condition,status
+engineering,s2_5_disabled,s2.2-stable,explicit soft-write gate disabled,unit and tensor replay,0,S2.4 freeze complete,max_abs_diff=0 and all engineering gates pass,planned
+unit,s2_5_soft_main,s2.2-stable,KEEP 1.0 RECOVER 0.75 DEFER 0.05,synthetic action and memory cases,0,disabled replay passes,scale alignment conservation source and checkpoint gates pass,blocked
+unit,s2_5_no_recover_discount,s2.2-stable,KEEP 1.0 RECOVER 1.0 DEFER 0.05,synthetic action and memory cases,0,disabled replay passes,scale alignment conservation source and checkpoint gates pass,blocked
+smoke,s2_5_soft_main,s2.2-stable,soft action-conditioned write scale,mini train smoke,minimal,all unit gates pass,finite run correct write scales and safe checkpoint,blocked
+smoke,s2_5_no_recover_discount,s2.2-stable,no RECOVER attenuation only,mini train smoke,minimal,all unit gates pass,finite run correct write scales and safe checkpoint,blocked
+screen,s2_5_soft_main,s2.2-stable,frozen main scales,Clean Crash5 Crash10 Compound and public recovery,50,main smoke passes,all engineering and performance gates pass,blocked
+screen,s2_5_no_recover_discount,s2.2-stable,frozen ablation scales,Clean Crash5 Crash10 Compound and public recovery,50,ablation smoke passes,all engineering and performance gates pass,blocked
+development,s2_5_selected,s2.2-stable,one frozen 50iter winner,Clean Crash5 Crash10 Compound and public recovery,200,exactly one candidate passes every 50iter gate,all gates remain satisfied,blocked
+robustness,s2_5_selected,s2.2-stable,frozen selected soft gate,declared development protocols,multi-seed,200iter passes and new authorization,stable without scale or threshold changes,blocked
+holdout,s2_5_selected,s2.2-stable,frozen final soft gate,authorized holdout,one-shot,multi-seed passes and explicit authorization,one-shot report without tuning,locked
