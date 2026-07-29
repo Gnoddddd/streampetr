@@ -1,0 +1,9 @@
+baseline,protocol,mismatch_count,max_abs_diff,pass
+B0,clean_no_corruption,0,0.0,True
+B0,camera_crash_back_5f,0,0.0,True
+B0,camera_crash_back_10f,0,0.0,True
+B0,compound_fog_crash_10f,0,0.0,True
+M1,clean_no_corruption,0,0.0,True
+M1,camera_crash_back_5f,0,0.0,True
+M1,camera_crash_back_10f,0,0.0,True
+M1,compound_fog_crash_10f,0,0.0,True

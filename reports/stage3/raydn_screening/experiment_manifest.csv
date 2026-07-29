@@ -1,5 +1,5 @@
-experiment,baseline,raydn,seed,init_checkpoint,max_iters,query_count,status
-B0,B0,false,2026,outputs/stage2/s2_2_source_ledger_debug_50/iter_50.pth,50,644,pre_registered
-B0_RayDN,B0,true,2026,outputs/stage2/s2_2_source_ledger_debug_50/iter_50.pth,50,644,pre_registered
-M1,M1,false,2026,outputs/stage2/s2_2_source_ledger_debug_50/iter_50.pth,50,644,pre_registered
-M1_RayDN,M1,true,2026,outputs/stage2/s2_2_source_ledger_debug_50/iter_50.pth,50,644,pre_registered
+experiment,baseline,raydn,seed,init_checkpoint,max_iters,query_count,status,iterations,final_loss,final_grad_norm,max_memory_mb,mean_iter_time_s,nan_inf_oom,raydn_state_keys,mean_inference_fps
+B0,B0,False,2026,outputs/stage2/s2_2_source_ledger_debug_50/iter_50.pth,50,644,completed,50,8.80552,141.24727,1994,0.36961346938775513,False,0,10.225000000000001
+B0_RayDN,B0,True,2026,outputs/stage2/s2_2_source_ledger_debug_50/iter_50.pth,50,644,completed,50,11.26394,154.33347,2239,0.39529285714285717,False,0,10.075000000000001
+M1,M1,False,2026,outputs/stage2/s2_2_source_ledger_debug_50/iter_50.pth,50,644,completed,50,13.15345,120.84311,2004,0.3951100000000001,False,0,8.425
+M1_RayDN,M1,True,2026,outputs/stage2/s2_2_source_ledger_debug_50/iter_50.pth,50,644,completed,50,15.13003,90.6842,2245,0.42052591836734693,False,0,8.4

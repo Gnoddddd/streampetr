@@ -1,0 +1,9 @@
+experiment,protocol,recover_candidates,recover_gt_matches,recover_gt_match_rate,recover_memory_writes,false_memory_writes,false_memory_write_rate,recover_match_center_error,recovery_delay_frames,recovered_scenes,unrecovered_scenes
+M1,clean_no_corruption,2,2,1.0,2,0,0.0,0.5955656776294938,nan,nan,nan
+M1,camera_crash_back_5f,88,33,0.375,62,31,0.5,0.8207828755758841,0.0,2,0
+M1,camera_crash_back_10f,153,71,0.46405228758169936,120,51,0.425,0.7364250862399749,0.0,2,0
+M1,compound_fog_crash_10f,1651,317,0.19200484554815264,957,693,0.7241379310344828,0.7148524697256969,0.0,2,0
+M1_RayDN,clean_no_corruption,2,2,1.0,2,0,0.0,0.638888027270697,nan,nan,nan
+M1_RayDN,camera_crash_back_5f,90,32,0.35555555555555557,60,31,0.5166666666666667,0.8016663722703963,0.0,2,0
+M1_RayDN,camera_crash_back_10f,158,70,0.4430379746835443,119,52,0.4369747899159664,0.7432783501754684,0.0,2,0
+M1_RayDN,compound_fog_crash_10f,1693,317,0.18724158298877733,962,703,0.7307692307692307,0.7048843861461546,0.0,2,0
