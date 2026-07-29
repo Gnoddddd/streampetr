@@ -31,9 +31,11 @@ log_config = dict(
     hooks=[dict(type="TextLoggerHook", by_epoch=False)],
 )
 
-# All groups use the same dynamic FP16 and max-norm clipping path.  Official
-# StreamPETR DN is disabled in every group so every DN-class loss is absent.
-fp16 = dict(loss_scale="dynamic")
+# StreamPETR's wrapper force-constructs the stock hook whenever this top-level
+# value is non-null.  Leave it null so the registered grouped hook below owns
+# the complete FP16 path (model wrapping, dynamic scaling, unscale and step).
+# Official StreamPETR DN is disabled in every group so DN loss keys are absent.
+fp16 = None
 optimizer_config = dict(
     type="GroupedFp16OptimizerHook",
     loss_scale="dynamic",
