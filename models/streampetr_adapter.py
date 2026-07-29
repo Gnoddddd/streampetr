@@ -31,6 +31,7 @@ from mmdet.models.utils.transformer import inverse_sigmoid
 from .evidence_ledger import EvidenceLedger
 from .keep_recover_defer import KeepRecoverDeferPolicy
 from .observability_head import GeometricObservabilityHead
+from .ray_denoising import prepare_ray_denoising
 from .temporal_update import EvidenceConservingTemporalUpdate
 from .ternary_objectness import (
     ObservabilityConditionedTernaryLoss,
@@ -73,6 +74,12 @@ class EvidenceConservingStreamPETRHead(StreamPETRHead):
         innovation_cfg: Optional[Dict] = None,
         innovation_warmup_iters: int = 0,
         innovation_transition_iters: int = 0,
+        enable_ray_denoising: bool = False,
+        raydn_group: int = 1,
+        raydn_num: int = 5,
+        raydn_alpha: float = 8.0,
+        raydn_beta: float = 2.0,
+        raydn_radius: float = 3.0,
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -91,6 +98,12 @@ class EvidenceConservingStreamPETRHead(StreamPETRHead):
             )
         self.calibrate_detection_scores = bool(calibrate_detection_scores)
         self.trace_enabled = bool(trace_enabled)
+        self.enable_ray_denoising = bool(enable_ray_denoising)
+        self.raydn_group = int(raydn_group)
+        self.raydn_num = int(raydn_num)
+        self.raydn_alpha = float(raydn_alpha)
+        self.raydn_beta = float(raydn_beta)
+        self.raydn_radius = float(raydn_radius)
         if source_camera_names is None:
             source_camera_names = tuple(
                 f"CAMERA_{index}" for index in range(self.num_cameras)
@@ -553,9 +566,23 @@ class EvidenceConservingStreamPETRHead(StreamPETRHead):
         pos_embed = self.featurized_pe(pos_embed, memory)
 
         reference_points = self.reference_points.weight
-        reference_points, attn_mask, mask_dict = self.prepare_for_dn(
-            batch_size, reference_points, img_metas
-        )
+        if self.training and self.enable_ray_denoising:
+            reference_points, attn_mask, mask_dict = prepare_ray_denoising(
+                self,
+                batch_size,
+                reference_points,
+                img_metas,
+                data,
+                raydn_group=self.raydn_group,
+                raydn_num=self.raydn_num,
+                raydn_alpha=self.raydn_alpha,
+                raydn_beta=self.raydn_beta,
+                raydn_radius=self.raydn_radius,
+            )
+        else:
+            reference_points, attn_mask, mask_dict = self.prepare_for_dn(
+                batch_size, reference_points, img_metas
+            )
         query_pos = self.query_embedding(pos2posemb3d(reference_points))
         tgt = torch.zeros_like(query_pos)
         (

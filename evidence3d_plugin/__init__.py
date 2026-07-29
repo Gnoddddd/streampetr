@@ -10,10 +10,12 @@ from datasets.corruption import ApplyPartialObservation  # noqa: F401
 from datasets.nuscenes_wrapper import EvidenceNuScenesDataset  # noqa: F401
 from hooks.evidence_trace_hook import EvidenceTraceHook  # noqa: F401
 from models.streampetr_adapter import EvidenceConservingStreamPETRHead  # noqa: F401
+from models.ray_denoising import RayDNStreamPETRHead  # noqa: F401
 
 __all__ = [
     "ApplyPartialObservation",
     "EvidenceNuScenesDataset",
     "EvidenceTraceHook",
     "EvidenceConservingStreamPETRHead",
+    "RayDNStreamPETRHead",
 ]
