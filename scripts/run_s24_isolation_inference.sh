@@ -70,4 +70,3 @@ for mode_index in "${!modes[@]}"; do
 done
 
 printf 'S2.4 isolation inference completed: %s\n' "$output_root"
-
