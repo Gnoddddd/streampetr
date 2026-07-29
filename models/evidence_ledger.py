@@ -582,6 +582,12 @@ class EvidenceLedger(nn.Module):
         legacy_provenance = torch.zeros_like(provenance)
         source_evidence = torch.zeros_like(provenance)
         age = torch.zeros_like(alpha)
+        previous_action = torch.full(
+            (batch_size, num_queries),
+            int(Action.DEFER),
+            device=device,
+            dtype=torch.long,
+        )
         reference_feature = torch.zeros(
             batch_size,
             num_queries,
@@ -629,6 +635,7 @@ class EvidenceLedger(nn.Module):
                 "provenance": provenance,
                 "legacy_provenance": legacy_provenance,
                 "age": age,
+                "previous_action": previous_action,
                 "reference_feature": reference_feature,
                 "reference_geometry": reference_geometry,
                 "reference_class_distribution": reference_class_distribution,
@@ -660,6 +667,7 @@ class EvidenceLedger(nn.Module):
                 :, :count
             ].to(dtype)
             age[:, start : start + count] = self.age[:, :count].to(dtype)
+            previous_action[:, start : start + count] = self.action[:, :count]
             reference_feature[:, start : start + count] = self.reference_feature[
                 :, :count
             ].to(dtype)
@@ -699,6 +707,7 @@ class EvidenceLedger(nn.Module):
             "provenance": provenance,
             "legacy_provenance": legacy_provenance,
             "age": age,
+            "previous_action": previous_action,
             "reference_feature": reference_feature,
             "reference_geometry": reference_geometry,
             "reference_class_distribution": reference_class_distribution,
@@ -1342,6 +1351,11 @@ class EvidenceLedger(nn.Module):
             "effective_count": effective_count,
             "reference_feature": current_feature.detach(),
             "reference_geometry": current_geometry.detach(),
+            "previous_reference_geometry": priors[
+                "reference_geometry"
+            ].detach(),
+            "previous_source_vector": priors["provenance"].detach(),
+            "previous_action": priors["previous_action"],
             "reference_class_distribution": current_class_probability.detach(),
             "reference_ternary_distribution": ternary_probabilities.detach(),
             "reference_valid": current_reference_valid,

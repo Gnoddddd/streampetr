@@ -128,6 +128,7 @@ def single_gpu_test_with_evidence_trace(
                 "sample_idx": str(meta.get("sample_idx", "")),
                 "scene_token": str(meta.get("scene_token", "")),
                 "frame_idx": int(meta.get("frame_idx", -1)),
+                "timestamp": float(meta.get("timestamp", 0.0)),
                 "protocol_file": protocol_file,
                 "summary": _to_jsonable(summary),
                 "diagnostics": _to_jsonable(diagnostics),

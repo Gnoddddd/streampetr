@@ -74,6 +74,7 @@ class EvidenceConservingStreamPETRHead(StreamPETRHead):
         innovation_warmup_iters: int = 0,
         innovation_transition_iters: int = 0,
         reacquisition_warmup_iters: int = 10,
+        enable_reacquisition_diagnostics: bool = False,
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -147,6 +148,9 @@ class EvidenceConservingStreamPETRHead(StreamPETRHead):
         )
         self.reacquisition_warmup_iters = max(
             int(reacquisition_warmup_iters), 0
+        )
+        self.enable_reacquisition_diagnostics = bool(
+            enable_reacquisition_diagnostics
         )
         self.register_buffer(
             "reacquisition_training_step",
@@ -428,6 +432,59 @@ class EvidenceConservingStreamPETRHead(StreamPETRHead):
             for key in diagnostic_keys
             if key in query_state
         }
+        if self.enable_reacquisition_diagnostics:
+            query_index = torch.arange(
+                num_queries,
+                device=rec_cls.device,
+                dtype=torch.long,
+            ).view(1, -1).expand(rec_cls.shape[0], -1)
+            query_source = torch.zeros_like(query_index)
+            query_source[:, num_base_queries:] = 1
+            class_confidence, predicted_class = rec_cls.sigmoid().max(dim=-1)
+            diagnostic_score_scale = (
+                query_state["existence_probability"]
+                * query_state["score_scale"]
+            ).clamp(0.0, 1.0)
+            diagnostic_score_scale = torch.where(
+                query_state["bootstrap_mask"],
+                torch.ones_like(diagnostic_score_scale),
+                diagnostic_score_scale,
+            )
+            current_center_global = transform_reference_points(
+                rec_bbox[..., :3].detach(),
+                data["ego_pose"],
+                reverse=False,
+            )
+            detailed_diagnostics = {
+                "query_index": query_index,
+                "query_source": query_source,
+                "decoder_layer": torch.full_like(
+                    query_index, int(self.num_pred - 1)
+                ),
+                "previous_action": query_state["previous_action"],
+                "previous_source_vector": query_state[
+                    "previous_source_vector"
+                ],
+                "previous_center": query_state[
+                    "previous_reference_geometry"
+                ][..., :3],
+                "current_center": rec_bbox[..., :3],
+                "current_center_global": current_center_global,
+                "velocity": rec_bbox[..., -2:],
+                "velocity_extrapolated_center": query_state[
+                    "predicted_center"
+                ],
+                "predicted_class": predicted_class,
+                "predicted_raw_score": class_confidence,
+                "predicted_score": class_confidence
+                * diagnostic_score_scale,
+            }
+            self._last_evidence_diagnostics.update(
+                {
+                    key: value.detach().cpu()
+                    for key, value in detailed_diagnostics.items()
+                }
+            )
         if self.evidence_ledger.enable_source_ledger:
             self._last_evidence_diagnostics[
                 "source_camera_names"
@@ -556,6 +613,37 @@ class EvidenceConservingStreamPETRHead(StreamPETRHead):
                 | query_state["bootstrap_mask"]
             )
         )
+        if self.enable_reacquisition_diagnostics:
+            flat_topk = topk_indexes.squeeze(-1)
+            selected_valid = topk_gather(
+                valid_query_write_mask.unsqueeze(-1),
+                topk_indexes,
+            ).squeeze(-1).bool()
+            actual_memory_write = torch.zeros_like(
+                valid_query_write_mask,
+                dtype=torch.bool,
+            )
+            actual_memory_write.scatter_(1, flat_topk, selected_valid)
+            memory_slot = torch.full_like(
+                flat_topk.new_empty(
+                    flat_topk.shape[0],
+                    num_queries,
+                ),
+                -1,
+            )
+            slot_values = torch.arange(
+                flat_topk.shape[1],
+                device=flat_topk.device,
+                dtype=flat_topk.dtype,
+            ).view(1, -1).expand_as(flat_topk)
+            memory_slot.scatter_(1, flat_topk, slot_values)
+            self._last_evidence_diagnostics.update(
+                {
+                    "actual_memory_write": actual_memory_write.detach().cpu(),
+                    "memory_slot": memory_slot.detach().cpu(),
+                    "topk_selected": (memory_slot >= 0).detach().cpu(),
+                }
+            )
         self.evidence_ledger.commit_topk(
             query_state,
             topk_indexes,
