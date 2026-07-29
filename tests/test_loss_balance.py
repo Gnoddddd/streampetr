@@ -75,6 +75,7 @@ def test_convergence_configs_freeze_fair_budget_and_disable_dn():
         assert cfg.optimizer.type == "AdamW"
         assert cfg.fp16 is None
         assert cfg.optimizer_config.type == "GroupedFp16OptimizerHook"
+        assert cfg.optimizer_config.loss_scale.init_scale == 512.0
         assert cfg.optimizer_config.grad_clip.max_norm == 35
         assert cfg.load_from.endswith(
             "stream_petr_r50_flash_704_bs2_seq_90e.pth"

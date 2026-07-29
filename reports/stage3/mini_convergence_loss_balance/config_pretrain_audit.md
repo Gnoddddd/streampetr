@@ -58,7 +58,10 @@ All groups use seed 2026, the same mini annotations and sampler, AdamW
 (`lr=2.5e-6`, weight decay 0.01), batch 1, dynamic FP16, max gradient norm 35,
 and the same 3,876-iteration budget.  Official StreamPETR DN is disabled in
 all groups, so DN loss keys are absent.  Dynamic FP16 is owned by the unified
-`GroupedFp16OptimizerHook`; the top-level `fp16` field is null because the
-StreamPETR wrapper otherwise force-constructs a second stock optimizer hook.
+`GroupedFp16OptimizerHook`, initialized at loss scale 512 with dynamic
+growth/backoff.  The top-level `fp16` field is null because the StreamPETR
+wrapper otherwise force-constructs a second stock optimizer hook.  The lower
+initial scale avoids the non-finite calibration steps produced by PyTorch's
+65536 default after DN is disabled; it is frozen identically for all groups.
 M1-Ramp differs from M1 only through a stateless hook on the existing ternary
 auxiliary-loss return value.

@@ -38,7 +38,10 @@ log_config = dict(
 fp16 = None
 optimizer_config = dict(
     type="GroupedFp16OptimizerHook",
-    loss_scale="dynamic",
+    # The PyTorch default dynamic scale (65536) overflowed before the first
+    # calibration step when official DN was disabled.  Start at MMCV's stable
+    # FP16 default while retaining dynamic growth/backoff.
+    loss_scale=dict(init_scale=512.0, growth_interval=2000),
     grad_clip=dict(max_norm=35, norm_type=2),
 )
 
