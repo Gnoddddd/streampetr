@@ -1,0 +1,9 @@
+{
+  "clean_map_noninferior": false,
+  "clean_nds_noninferior": false,
+  "engineering_invariants_pass": true,
+  "fault_average_map_noninferior": true,
+  "fault_average_nds_noninferior": true,
+  "individual_fault_tolerance_pass": false,
+  "overall_pass": false
+}
