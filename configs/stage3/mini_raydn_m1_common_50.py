@@ -14,7 +14,10 @@ log_config = dict(
     interval=1,
     hooks=[dict(type="TextLoggerHook", by_epoch=False)],
 )
-fp16 = dict(loss_scale="dynamic")
+# Full-detector fine-tuning overflows MMCV's default dynamic initial scale
+# consistently in all four groups.  Use MMCV's stable documented default
+# scale for every group; this is not a RayDN-specific adjustment.
+fp16 = dict(loss_scale=512.0)
 optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
 
 # Candidate-quality screening must update the detector.  The Stage2
@@ -37,4 +40,3 @@ model = dict(
         raydn_radius=3.0,
     ),
 )
-

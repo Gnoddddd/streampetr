@@ -74,7 +74,8 @@ sets RayDN true. It therefore adds no inference latency or persistent state.
 
 Groups are limited to B0, B0+RayDN, M1 and M1+RayDN. All start from
 `outputs/stage2/s2_2_source_ledger_debug_50/iter_50.pth`, seed 2026, the same
-mini split/order, optimizer, LR, batch size, FP16, gradient clipping, 644
+mini split/order, optimizer, LR, batch size, FP16 with fixed loss scale 512,
+gradient clipping, 644
 object queries and 50 iterations. B0 ignores the checkpoint's Evidence3D-only
 keys; shared detector tensors are identical at initialization.
 
@@ -89,4 +90,3 @@ baseline:
 6. M1 conservation and source-mass violation counts remain zero.
 
 The thresholds and fixed formula above are frozen before smoke or training.
-
