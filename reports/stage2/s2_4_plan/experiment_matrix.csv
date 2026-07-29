@@ -1,0 +1,11 @@
+stage,candidate,baseline,core_difference,protocols,iterations,entry_condition,exit_condition,status
+engineering,s2_4_disabled,s2.2-stable,explicit correlation discount disabled,unit and tensor replay,0,S2.2 anchor checked,max_abs_diff=0 and all engineering gates pass,planned
+unit,s2_4_fixed,s2.2-stable,fixed six-camera correlation prior,synthetic source patterns,0,disabled path passes,N_eff and conservation/source invariants pass,planned
+unit,s2_4_identity,s2.2-stable,identity R necessary ablation,synthetic source patterns,0,disabled path passes,N_eff and conservation/source invariants pass,planned
+smoke,s2_4_fixed,s2.2-stable,fixed R only,mini train smoke,minimal,all unit and invariance gates pass,finite run and checkpoint-safe,blocked
+smoke,s2_4_identity,s2.2-stable,identity R only,mini train smoke,minimal,all unit and invariance gates pass,finite run and checkpoint-safe,blocked
+screen,s2_4_fixed,s2.2-stable,fixed R only,Clean Crash5 Crash10 Compound and public recovery,50,corresponding smoke passes,all engineering and performance gates pass,blocked
+screen,s2_4_identity,s2.2-stable,identity R only,Clean Crash5 Crash10 Compound and public recovery,50,corresponding smoke passes,all engineering and performance gates pass,blocked
+development,s2_4_selected,s2.2-stable,one pre-registered winner only,Clean Crash5 Crash10 Compound and public recovery,200,50iter hard gates pass,all hard gates remain satisfied,blocked
+robustness,s2_4_selected,s2.2-stable,frozen selected method,declared dev matrix,multi-seed,200iter passes and method frozen,stable across seeds without threshold changes,blocked
+holdout,s2_4_selected,s2.2-stable,frozen final method,authorized holdout,one-shot,multi-seed passes and explicit authorization,report once without tuning,locked
