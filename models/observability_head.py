@@ -58,6 +58,7 @@ class GeometricObservabilityHead(nn.Module):
         boundary_softness: float = 8.0,
         depth_temperature: float = 4.0,
         correlation_matrix: Optional[Sequence[Sequence[float]]] = None,
+        enable_correlation_discount: bool = False,
         learned_residual: bool = False,
         embed_dims: int = 256,
         residual_weight: float = 0.0,
@@ -68,6 +69,9 @@ class GeometricObservabilityHead(nn.Module):
         self.min_depth = float(min_depth)
         self.boundary_softness = max(float(boundary_softness), 1e-3)
         self.depth_temperature = float(depth_temperature)
+        self.enable_correlation_discount = bool(
+            enable_correlation_discount
+        )
         self.learned_residual = bool(learned_residual)
         self.residual_weight = float(residual_weight)
         self.eps = float(eps)
@@ -263,22 +267,33 @@ class GeometricObservabilityHead(nn.Module):
             torch.zeros_like(fresh_ratio),
         )
 
-        weights = per_camera
-        numerator = weights.sum(dim=-1).pow(2)
-        diagonal = weights.pow(2).sum(dim=-1)
-        correlation = self.camera_correlation.to(
-            device=weights.device, dtype=weights.dtype
-        )
-        pairwise = torch.einsum(
-            "lbqm,mn,lbqn->lbq", weights, correlation, weights
-        )
-        off_diagonal = (pairwise - diagonal).clamp_min(0.0)
-        effective_count = numerator / (diagonal + off_diagonal + self.eps)
-        effective_count = torch.where(
-            support_sum.squeeze(-1) > self.eps,
-            effective_count.clamp(0.0, float(num_cameras)),
-            torch.zeros_like(effective_count),
-        )
+        if self.enable_correlation_discount:
+            weights = per_camera
+            numerator = weights.sum(dim=-1).pow(2)
+            diagonal = weights.pow(2).sum(dim=-1)
+            correlation = self.camera_correlation.to(
+                device=weights.device, dtype=weights.dtype
+            )
+            pairwise = torch.einsum(
+                "lbqm,mn,lbqn->lbq",
+                weights,
+                correlation,
+                weights,
+            )
+            off_diagonal = (pairwise - diagonal).clamp_min(0.0)
+            effective_count = numerator / (
+                diagonal + off_diagonal + self.eps
+            )
+            effective_count = torch.where(
+                support_sum.squeeze(-1) > self.eps,
+                effective_count.clamp(0.0, float(num_cameras)),
+                torch.zeros_like(effective_count),
+            )
+        else:
+            # This tensor is diagnostic only on the disabled path. The
+            # adapter passes ``None`` to the temporal update so no S2.4
+            # matrix or N_eff value participates in evidence accumulation.
+            effective_count = torch.ones_like(observability)
 
         output = {
             "observability": observability.clamp(0.0, 1.0),

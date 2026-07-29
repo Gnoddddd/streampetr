@@ -511,6 +511,12 @@ class EvidenceLedger(nn.Module):
         legacy_provenance = torch.zeros_like(provenance)
         source_evidence = torch.zeros_like(provenance)
         age = torch.zeros_like(alpha)
+        action = torch.full(
+            (batch_size, num_queries),
+            int(Action.DEFER),
+            device=device,
+            dtype=torch.long,
+        )
         reference_feature = torch.zeros(
             batch_size,
             num_queries,
@@ -551,6 +557,7 @@ class EvidenceLedger(nn.Module):
                 "provenance": provenance,
                 "legacy_provenance": legacy_provenance,
                 "age": age,
+                "action": action,
                 "reference_feature": reference_feature,
                 "reference_geometry": reference_geometry,
                 "reference_class_distribution": reference_class_distribution,
@@ -575,6 +582,7 @@ class EvidenceLedger(nn.Module):
                 :, :count
             ].to(dtype)
             age[:, start : start + count] = self.age[:, :count].to(dtype)
+            action[:, start : start + count] = self.action[:, :count]
             reference_feature[:, start : start + count] = self.reference_feature[
                 :, :count
             ].to(dtype)
@@ -597,6 +605,7 @@ class EvidenceLedger(nn.Module):
             "provenance": provenance,
             "legacy_provenance": legacy_provenance,
             "age": age,
+            "action": action,
             "reference_feature": reference_feature,
             "reference_geometry": reference_geometry,
             "reference_class_distribution": reference_class_distribution,
@@ -705,7 +714,7 @@ class EvidenceLedger(nn.Module):
         observability: Tensor,
         source_vector: Tensor,
         fresh_ratio: Tensor,
-        effective_count: Tensor,
+        effective_count: Optional[Tensor],
         num_base_queries: int,
         num_propagated: int,
         use_strong_negative: bool = True,
@@ -718,6 +727,11 @@ class EvidenceLedger(nn.Module):
         innovation_step: Optional[int] = None,
     ) -> Dict[str, Tensor]:
         batch_size, num_queries, _ = ternary_probabilities.shape
+        diagnostic_effective_count = (
+            torch.ones_like(observability)
+            if effective_count is None
+            else effective_count
+        )
         priors = self._query_priors(
             batch_size,
             num_queries,
@@ -949,9 +963,10 @@ class EvidenceLedger(nn.Module):
             "provenance": provenance,
             "legacy_provenance": legacy_provenance,
             "age": age,
+            "previous_action": priors["action"],
             "observability": observability,
             "novelty": novelty,
-            "effective_count": effective_count,
+            "effective_count": diagnostic_effective_count,
             "reference_feature": current_feature.detach(),
             "reference_geometry": current_geometry.detach(),
             "reference_class_distribution": current_class_probability.detach(),

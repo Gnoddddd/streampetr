@@ -11,6 +11,8 @@ critical points identified in the research plan:
 from __future__ import annotations
 
 import copy
+import hashlib
+import os
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import torch
@@ -64,6 +66,7 @@ class EvidenceConservingStreamPETRHead(StreamPETRHead):
         evidence_probability_source: str = "ternary",
         calibrate_detection_scores: bool = True,
         trace_enabled: bool = True,
+        enable_correlation_discount: bool = False,
         enable_source_ledger: bool = False,
         source_decay: Optional[float] = None,
         source_mass_tolerance: float = 1e-5,
@@ -91,6 +94,9 @@ class EvidenceConservingStreamPETRHead(StreamPETRHead):
             )
         self.calibrate_detection_scores = bool(calibrate_detection_scores)
         self.trace_enabled = bool(trace_enabled)
+        self.enable_correlation_discount = bool(
+            enable_correlation_discount
+        )
         if source_camera_names is None:
             source_camera_names = tuple(
                 f"CAMERA_{index}" for index in range(self.num_cameras)
@@ -102,6 +108,9 @@ class EvidenceConservingStreamPETRHead(StreamPETRHead):
         observability_cfg = dict(observability_cfg or {})
         observability_cfg.setdefault("num_cameras", self.num_cameras)
         observability_cfg.setdefault("embed_dims", self.embed_dims)
+        observability_cfg["enable_correlation_discount"] = (
+            self.enable_correlation_discount
+        )
         self.observability_head = GeometricObservabilityHead(**observability_cfg)
 
         prototype = TernaryObjectnessHead(
@@ -155,6 +164,17 @@ class EvidenceConservingStreamPETRHead(StreamPETRHead):
             self.evidence_ledger.reset()
         self._last_evidence_summary = {}
         self._last_evidence_diagnostics = {}
+
+    @staticmethod
+    def _tensor_sha256(value: Optional[Tensor]) -> str:
+        if value is None:
+            return "none"
+        tensor = value.detach().contiguous().cpu()
+        payload = (
+            f"{tensor.dtype}:{tuple(tensor.shape)}:".encode("ascii")
+            + tensor.numpy().tobytes()
+        )
+        return hashlib.sha256(payload).hexdigest()
 
     def pre_update_memory(
         self,
@@ -234,7 +254,11 @@ class EvidenceConservingStreamPETRHead(StreamPETRHead):
             observability_output["source_vector"],
         )[-1, :, pad_size:]
         rec_fresh = observability_output["fresh_ratio"][-1, :, pad_size:]
-        rec_effective = observability_output["effective_count"][-1, :, pad_size:]
+        rec_effective = (
+            observability_output["effective_count"][-1, :, pad_size:]
+            if self.enable_correlation_discount
+            else None
+        )
         rec_class_probability = rec_cls.sigmoid()
         rec_class_probability = rec_class_probability / (
             rec_class_probability.sum(dim=-1, keepdim=True).clamp_min(1e-6)
@@ -328,6 +352,7 @@ class EvidenceConservingStreamPETRHead(StreamPETRHead):
             "source_mass_violation",
             "zero_source_increment",
             "age",
+            "previous_action",
             "action",
             "score_scale",
             "write_mask",
@@ -506,6 +531,9 @@ class EvidenceConservingStreamPETRHead(StreamPETRHead):
             topk_indexes,
             valid_write_mask=valid_query_write_mask,
         )
+        self._last_evidence_diagnostics["topk_indexes"] = (
+            topk_indexes.detach().cpu()
+        )
         self.evidence_ledger.transform_reference_geometry(data["ego_pose"])
         if self.trace_enabled:
             self._last_evidence_summary = self.evidence_ledger.summarize(query_state)
@@ -658,6 +686,24 @@ class EvidenceConservingStreamPETRHead(StreamPETRHead):
             all_ternary_probabilities,
             observability_output,
         )
+        if os.environ.get("EVIDENCE3D_S24_ISOLATION_AUDIT") == "1":
+            audit_tensors = {
+                "classification": all_cls_scores,
+                "box": all_bbox_preds,
+                "decoder": outs_dec,
+                "propagated_query": temp_memory,
+                "temporal_memory_embedding": self.memory_embedding,
+                "temporal_memory_reference_point": (
+                    self.memory_reference_point
+                ),
+                "temporal_memory_velocity": self.memory_velo,
+            }
+            self._last_evidence_diagnostics.update(
+                {
+                    f"{name}_sha256": self._tensor_sha256(value)
+                    for name, value in audit_tensors.items()
+                }
+            )
 
         pad_size = int(mask_dict["pad_size"]) if mask_dict and mask_dict.get("pad_size", 0) > 0 else 0
         if pad_size > 0:
