@@ -6,6 +6,10 @@ heads, coders, samplers, and pipelines are registered before our subclasses.
 
 import projects.mmdet3d_plugin  # noqa: F401
 
+from diagnostics.memory_write_trace import install_memory_write_trace
+
+install_memory_write_trace()
+
 from datasets.corruption import ApplyPartialObservation  # noqa: F401
 from datasets.distillation import (  # noqa: F401
     FinalizePairedCleanImages,
