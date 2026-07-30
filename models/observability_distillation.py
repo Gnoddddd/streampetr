@@ -309,9 +309,20 @@ class ObservabilityDistillationPetr3D(Petr3D):
         )
         super().__init__(*args, **kwargs)
         object.__setattr__(self, "_ema_teacher", None)
+        self._teacher_training_layout = False
 
     def set_ema_teacher(self, teacher) -> None:
         object.__setattr__(self, "_ema_teacher", teacher)
+
+    def extract_img_feat(self, img, len_queue=1, training_mode=False):
+        # Stock Petr3D couples temporal feature shape to ``self.training``.
+        # EMA inference must remain eval-mode while retaining the train
+        # sequence layout expected by ``obtain_history_memory``.
+        return super().extract_img_feat(
+            img,
+            len_queue,
+            training_mode=training_mode or self._teacher_training_layout,
+        )
 
     def forward_train(
         self,
@@ -346,6 +357,7 @@ class ObservabilityDistillationPetr3D(Petr3D):
         teacher_data = dict(data)
         teacher_data["img"] = clean_img
         teacher.eval()
+        teacher._teacher_training_layout = True
         teacher.pts_bbox_head.set_distillation_context(None, None)
         with torch.no_grad():
             Petr3D.forward_train(
@@ -360,6 +372,7 @@ class ObservabilityDistillationPetr3D(Petr3D):
                 centers2d,
                 **teacher_data,
             )
+        teacher._teacher_training_layout = False
         teacher.eval()
         teacher_targets = {
             "all_cls_scores": teacher.pts_bbox_head._last_outputs[
