@@ -1,0 +1,5 @@
+protocol,records,compared_tensors,max_abs_diff,exact
+clean_no_corruption,81,243,0.0,True
+camera_crash_back_5f,81,243,0.0,True
+camera_crash_back_10f,81,243,0.0,True
+compound_fog_crash_10f,81,243,0.0,True
