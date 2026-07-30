@@ -124,6 +124,9 @@ class ApplyPartialObservation:
         motion_blur_prob: float = 0.08,
         max_severity: float = 0.8,
         visual_ablation_mode: str = "full",
+        exclusive_uniform: bool = False,
+        corruption_probability: float = 0.5,
+        preserve_clean: bool = False,
     ) -> None:
         self.camera_names = tuple(camera_names)
         self.training = bool(training)
@@ -135,6 +138,11 @@ class ApplyPartialObservation:
         self.fog_prob = float(fog_prob)
         self.motion_blur_prob = float(motion_blur_prob)
         self.max_severity = float(max_severity)
+        self.exclusive_uniform = bool(exclusive_uniform)
+        self.corruption_probability = float(corruption_probability)
+        self.preserve_clean = bool(preserve_clean)
+        if not 0.0 <= self.corruption_probability <= 1.0:
+            raise ValueError("corruption_probability must be in [0, 1]")
 
         requested_mode = os.environ.get(
             "EVIDENCE3D_VISUAL_ABLATION_MODE",
@@ -194,6 +202,37 @@ class ApplyPartialObservation:
                 state[key][name] = float(rng.uniform(0.2, self.max_severity))
         return state
 
+    def _exclusive_uniform_state(self, rng: np.random.Generator) -> Dict:
+        """Sample clean or exactly one of the six preregistered corruptions."""
+        state = {
+            "failed_cameras": [],
+            "lost_cameras": [],
+            "dark": {},
+            "fog": {},
+            "motion_blur": {},
+        }
+        if rng.random() >= self.corruption_probability:
+            return state
+        kind = int(rng.integers(0, 6))
+        camera = str(rng.choice(self.camera_names))
+        severity = float(rng.uniform(0.2, self.max_severity))
+        if kind == 0:
+            state["failed_cameras"] = [camera]
+        elif kind == 1:
+            state["lost_cameras"] = [camera]
+        elif kind == 2:
+            state["dark"][camera] = severity
+        elif kind == 3:
+            state["fog"][camera] = severity
+        elif kind == 4:
+            state["motion_blur"][camera] = severity
+        else:
+            # Compound is fixed as one crashed view plus fog on another view.
+            other = str(rng.choice([name for name in self.camera_names if name != camera]))
+            state["failed_cameras"] = [camera]
+            state["fog"][other] = severity
+        return state
+
     def __call__(self, results: Dict) -> Dict:
         images = results.get("img")
         if images is None:
@@ -240,9 +279,15 @@ class ApplyPartialObservation:
         elif self.training and os.environ.get(
             "EVIDENCE3D_DISABLE_RANDOM_CORRUPTION", "0"
         ).lower() not in {"1", "true", "yes", "on"}:
-            state = self._random_state(rng)
+            state = (
+                self._exclusive_uniform_state(rng)
+                if self.exclusive_uniform
+                else self._random_state(rng)
+            )
 
         output = _copy_images(images)
+        if self.preserve_clean:
+            results["clean_img"] = _copy_images(images)
         online = np.ones(len(self.camera_names), dtype=np.float32)
         quality = np.ones(len(self.camera_names), dtype=np.float32)
         fresh = np.ones(len(self.camera_names), dtype=np.float32)
@@ -322,5 +367,7 @@ class ApplyPartialObservation:
             f"schedule_file={self.schedule_file!r}, "
             f"seed={self.seed}, "
             f"visual_ablation_mode="
-            f"{self.visual_ablation_mode!r})"
+            f"{self.visual_ablation_mode!r}, "
+            f"exclusive_uniform={self.exclusive_uniform}, "
+            f"preserve_clean={self.preserve_clean})"
         )
