@@ -256,12 +256,16 @@ class ObservabilityDistillationStreamPETRHead(StreamPETRHead):
                     teacher_cls[batch_index, teacher_indices].detach(),
                 )
             )
-            student_norm = normalize_bbox(
-                student_bbox[batch_index, student_indices], self.pc_range
-            )
-            teacher_norm = normalize_bbox(
-                teacher_bbox[batch_index, teacher_indices], self.pc_range
-            )
+            # StreamPETR predictions already use the training encoding
+            # [xyz, log-size, sin/cos-yaw, velocity]; only xyz is restored to
+            # metric coordinates by ``forward``. Normalize that xyz back to
+            # [0,1] without applying a second logarithm to encoded sizes.
+            student_norm = student_bbox[batch_index, student_indices].float().clone()
+            teacher_norm = teacher_bbox[batch_index, teacher_indices].float().clone()
+            pc_min = student_norm.new_tensor(self.pc_range[:3])
+            pc_span = student_norm.new_tensor(self.pc_range[3:6]) - pc_min
+            student_norm[..., :3] = (student_norm[..., :3] - pc_min) / pc_span
+            teacher_norm[..., :3] = (teacher_norm[..., :3] - pc_min) / pc_span
             box_terms.append(F.l1_loss(student_norm, teacher_norm.detach()))
             student_query = F.normalize(
                 student_embed[batch_index, student_indices].float(), dim=-1
