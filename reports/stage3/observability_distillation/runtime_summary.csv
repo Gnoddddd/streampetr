@@ -1,0 +1,4 @@
+experiment,train_log_records,mean_train_iter_seconds,max_train_memory_mb,clean_eval_wall_seconds_81_frames,inference_parameter_count,inference_flops_equal_b0,nan_inf_oom,deployment_state_keys,teacher_runtime_keys
+B0,193,0.34346300518134715,1756.0,20.59,37259345,True,False,591,0
+R0,193,0.3510666839378239,1756.0,20.97,37259345,True,False,591,0
+R1,193,0.43039502590673573,1906.0,20.98,37259345,True,False,591,0

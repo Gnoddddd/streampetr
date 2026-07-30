@@ -1,0 +1,4 @@
+experiment,config,seed,init_checkpoint,init_sha256,train_samples,iters_per_epoch,epochs,max_iters,selected_epoch_by_clean_nds,uses_val_or_test_for_training
+B0,configs/stage3/mini_observability_b0.py,2026,checkpoints/official/stream_petr_r50_flash_704_bs2_seq_90e.pth,e6323ae5c31adf1eedd46d6dd4fd3c73d95aa26f18cc8aa23c196494b7de3451,323,323,6,1938,3,False
+R0,configs/stage3/mini_observability_r0.py,2026,checkpoints/official/stream_petr_r50_flash_704_bs2_seq_90e.pth,e6323ae5c31adf1eedd46d6dd4fd3c73d95aa26f18cc8aa23c196494b7de3451,323,323,6,1938,1,False
+R1,configs/stage3/mini_observability_r1.py,2026,checkpoints/official/stream_petr_r50_flash_704_bs2_seq_90e.pth,e6323ae5c31adf1eedd46d6dd4fd3c73d95aa26f18cc8aa23c196494b7de3451,323,323,6,1938,1,False

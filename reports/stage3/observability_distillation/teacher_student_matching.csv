@@ -1,0 +1,10 @@
+experiment,epoch,records,teacher_student_match_rate,query_consistency,loss_distill_cls,loss_distill_bbox,loss_distill_query,teacher_has_grad_max
+B0,1,32,nan,nan,nan,nan,nan,0.0
+B0,3,32,nan,nan,nan,nan,nan,0.0
+B0,6,32,nan,nan,nan,nan,nan,0.0
+R0,1,32,nan,nan,nan,nan,nan,0.0
+R0,3,32,nan,nan,nan,nan,nan,0.0
+R0,6,32,nan,nan,nan,nan,nan,0.0
+R1,1,32,1.0,0.9431546875,0.3433515625,0.04439,0.0056840625,0.0
+R1,3,32,1.0,0.9462434375,0.2923553125,0.0406734375,0.00537625,0.0
+R1,6,32,1.0,0.949153125,0.255841875,0.039241874999999996,0.005085,0.0

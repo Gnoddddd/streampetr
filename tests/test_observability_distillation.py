@@ -102,3 +102,30 @@ def test_disabled_detector_has_exact_b0_state_and_parameter_count():
         p.numel() for p in disabled.parameters()
     )
     assert all("_ema_teacher" not in key for key in disabled_state)
+
+
+def test_ema_teacher_is_frozen_and_not_registered_in_deployment_state():
+    from hooks.ema_teacher_hook import TrainingOnlyEMATeacherHook
+
+    class TinyStudent(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.ones(2))
+            self.enable_observability_distillation = True
+            self.num_frame_losses = 1
+            object.__setattr__(self, "_ema_teacher", None)
+
+        def set_ema_teacher(self, teacher):
+            object.__setattr__(self, "_ema_teacher", teacher)
+
+    class Runner:
+        model = TinyStudent()
+
+    before = tuple(Runner.model.state_dict())
+    TrainingOnlyEMATeacherHook(momentum=0.999).before_run(Runner)
+    teacher = Runner.model._ema_teacher
+    assert teacher is not None
+    assert all(not parameter.requires_grad for parameter in teacher.parameters())
+    assert all(parameter.grad is None for parameter in teacher.parameters())
+    assert tuple(Runner.model.state_dict()) == before
+    assert all("teacher" not in key for key in Runner.model.state_dict())
