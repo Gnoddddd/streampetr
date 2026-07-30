@@ -25,6 +25,9 @@ class TrainingOnlyEMATeacherHook(Hook):
             raise RuntimeError("EMA hook requires enabled distillation detector")
         teacher = copy.deepcopy(student)
         teacher.set_ema_teacher(None)
+        # The teacher supplies targets only; it must never construct detection
+        # or 2D auxiliary losses.
+        teacher.num_frame_losses = 0
         teacher.eval()
         for parameter in teacher.parameters():
             parameter.requires_grad_(False)
