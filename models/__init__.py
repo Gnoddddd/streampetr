@@ -36,3 +36,9 @@ __all__ = [
     "ABSENT",
     "UNOBSERVED",
 ]
+from .feq_losses import (  # noqa: F401
+    adjacent_survival_loss,
+    greedy_auxiliary_assignment,
+    ranking_loss,
+    supervision_weights,
+)

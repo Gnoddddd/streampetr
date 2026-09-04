@@ -1,0 +1,31 @@
+{
+  "scenes": {
+    "325cef682f064c55a255f2625c533b75": [
+      {
+        "dark": {},
+        "end_frame": 22,
+        "failed_cameras": [
+          "CAM_BACK"
+        ],
+        "fog": {},
+        "lost_cameras": [],
+        "motion_blur": {},
+        "start_frame": 3
+      }
+    ],
+    "fcbccedd61424f1b85dcbf8f897f9754": [
+      {
+        "dark": {},
+        "end_frame": 22,
+        "failed_cameras": [
+          "CAM_BACK"
+        ],
+        "fog": {},
+        "lost_cameras": [],
+        "motion_blur": {},
+        "start_frame": 3
+      }
+    ]
+  },
+  "version": 1
+}

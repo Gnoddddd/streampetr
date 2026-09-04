@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Dict, Sequence
 
@@ -36,7 +37,19 @@ class EvidenceNuScenesDataset(CustomNuScenesDataset):
 
     CAMERA_NAMES: Sequence[str] = CAMERA_NAMES
 
+    def __init__(self, *args, feq_history_file=None, **kwargs):
+        self.feq_history_file = feq_history_file
+        self._feq_history = {}
+        if feq_history_file:
+            payload = json.loads(Path(feq_history_file).read_text())
+            self._feq_history = payload.get("samples", {})
+        super().__init__(*args, **kwargs)
+
     def get_data_info(self, index):  # type: ignore[override]
         data = super().get_data_info(index)
         data["camera_names"] = list(self.CAMERA_NAMES)
+        if self.feq_history_file:
+            data["feq_history_centers"] = self._feq_history.get(
+                str(data.get("sample_idx")), []
+            )
         return data

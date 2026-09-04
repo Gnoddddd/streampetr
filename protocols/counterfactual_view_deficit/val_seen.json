@@ -1,0 +1,182 @@
+{
+  "scenes": {
+    "325cef682f064c55a255f2625c533b75": [
+      {
+        "dark": {},
+        "end_frame": 2,
+        "failed_cameras": [
+          "CAM_FRONT_RIGHT",
+          "CAM_BACK_RIGHT"
+        ],
+        "fog": {},
+        "lost_cameras": [],
+        "motion_blur": {},
+        "start_frame": 2
+      },
+      {
+        "dark": {},
+        "end_frame": 9,
+        "failed_cameras": [
+          "CAM_BACK",
+          "CAM_BACK_LEFT"
+        ],
+        "fog": {},
+        "lost_cameras": [],
+        "motion_blur": {},
+        "start_frame": 5
+      },
+      {
+        "dark": {},
+        "end_frame": 14,
+        "failed_cameras": [
+          "CAM_FRONT_RIGHT",
+          "CAM_BACK_RIGHT"
+        ],
+        "fog": {},
+        "lost_cameras": [],
+        "motion_blur": {},
+        "start_frame": 12
+      },
+      {
+        "dark": {},
+        "end_frame": 21,
+        "failed_cameras": [
+          "CAM_BACK_RIGHT",
+          "CAM_BACK"
+        ],
+        "fog": {},
+        "lost_cameras": [],
+        "motion_blur": {},
+        "start_frame": 17
+      },
+      {
+        "dark": {},
+        "end_frame": 28,
+        "failed_cameras": [
+          "CAM_FRONT_LEFT",
+          "CAM_FRONT"
+        ],
+        "fog": {},
+        "lost_cameras": [],
+        "motion_blur": {},
+        "start_frame": 24
+      },
+      {
+        "dark": {},
+        "end_frame": 33,
+        "failed_cameras": [
+          "CAM_BACK_LEFT"
+        ],
+        "fog": {},
+        "lost_cameras": [],
+        "motion_blur": {},
+        "start_frame": 31
+      },
+      {
+        "dark": {},
+        "end_frame": 38,
+        "failed_cameras": [
+          "CAM_BACK_LEFT"
+        ],
+        "fog": {},
+        "lost_cameras": [],
+        "motion_blur": {},
+        "start_frame": 36
+      }
+    ],
+    "fcbccedd61424f1b85dcbf8f897f9754": [
+      {
+        "dark": {},
+        "end_frame": 6,
+        "failed_cameras": [
+          "CAM_FRONT_LEFT"
+        ],
+        "fog": {},
+        "lost_cameras": [],
+        "motion_blur": {},
+        "start_frame": 2
+      },
+      {
+        "dark": {},
+        "end_frame": 9,
+        "failed_cameras": [
+          "CAM_BACK_RIGHT",
+          "CAM_BACK"
+        ],
+        "fog": {},
+        "lost_cameras": [],
+        "motion_blur": {},
+        "start_frame": 9
+      },
+      {
+        "dark": {},
+        "end_frame": 12,
+        "failed_cameras": [
+          "CAM_FRONT"
+        ],
+        "fog": {},
+        "lost_cameras": [],
+        "motion_blur": {},
+        "start_frame": 12
+      },
+      {
+        "dark": {},
+        "end_frame": 17,
+        "failed_cameras": [
+          "CAM_FRONT",
+          "CAM_FRONT_RIGHT"
+        ],
+        "fog": {},
+        "lost_cameras": [],
+        "motion_blur": {},
+        "start_frame": 15
+      },
+      {
+        "dark": {},
+        "end_frame": 22,
+        "failed_cameras": [
+          "CAM_BACK_LEFT",
+          "CAM_FRONT_LEFT"
+        ],
+        "fog": {},
+        "lost_cameras": [],
+        "motion_blur": {},
+        "start_frame": 20
+      },
+      {
+        "dark": {},
+        "end_frame": 25,
+        "failed_cameras": [
+          "CAM_FRONT_LEFT"
+        ],
+        "fog": {},
+        "lost_cameras": [],
+        "motion_blur": {},
+        "start_frame": 25
+      },
+      {
+        "dark": {},
+        "end_frame": 30,
+        "failed_cameras": [
+          "CAM_FRONT"
+        ],
+        "fog": {},
+        "lost_cameras": [],
+        "motion_blur": {},
+        "start_frame": 28
+      },
+      {
+        "dark": {},
+        "end_frame": 37,
+        "failed_cameras": [
+          "CAM_BACK"
+        ],
+        "fog": {},
+        "lost_cameras": [],
+        "motion_blur": {},
+        "start_frame": 33
+      }
+    ]
+  },
+  "version": 1
+}
