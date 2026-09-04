@@ -20,6 +20,13 @@ from .innovation import (
     normalized_js_divergence,
     wrapped_angle_difference,
 )
+from .care3d import (
+    CARE3DCore,
+    CARE3DStateEncoder,
+    CounterfactualVulnerabilityHead,
+    CounterfactualVulnerabilityLoss,
+    SparseEvidenceRouter,
+)
 
 __all__ = [
     "GeometricObservabilityHead",
@@ -31,6 +38,11 @@ __all__ = [
     "ReliabilityCalibratedInnovation",
     "normalized_js_divergence",
     "wrapped_angle_difference",
+    "CARE3DCore",
+    "CARE3DStateEncoder",
+    "CounterfactualVulnerabilityHead",
+    "CounterfactualVulnerabilityLoss",
+    "SparseEvidenceRouter",
     "Action",
     "PRESENT",
     "ABSENT",
