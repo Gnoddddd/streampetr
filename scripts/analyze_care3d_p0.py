@@ -165,8 +165,10 @@ def predict(checkpoint, arrays, device, batch_size):
     with torch.no_grad():
         for start in range(0, n, batch_size):
             stop = min(start + batch_size, n)
+
             def tensor(key):
                 return torch.from_numpy(np.asarray(arrays[key][start:stop])).float().to(device).unsqueeze(1)
+
             output = model(
                 object_features=tensor("object_features"),
                 camera_support=tensor("camera_support"),
@@ -201,7 +203,7 @@ def main() -> None:
 
     for seed_index, seed in enumerate(SEEDS):
         checkpoint = REPORT / "training" / f"seed_{seed}" / "best.pth"
-        for split_index, split in enumerate(("probe_val", "probe_test")):
+        for split in ("probe_val", "probe_test"):
             metadata, arrays = split_data[split]
             predicted_drop, logits = predict(checkpoint, arrays, device, args.batch_size)
             probabilities = sigmoid(logits)
@@ -255,19 +257,41 @@ def main() -> None:
             instance = bootstrap_frame[(bootstrap_frame.seed == seed) &
                                        (bootstrap_frame.protocol == protocol) &
                                        (bootstrap_frame.cluster == "instance_token")].iloc[0]
-            rank_pass = bool(test.spearman > 0 and scene.spearman_ci_low > 0 and instance.spearman_ci_low > 0)
-            separation_pass = bool(test.decile_drop_delta > 0 and scene.decile_drop_delta_ci_low > 0 and
+
+            rank_pass = bool(test.spearman > 0 and
+                             scene.spearman_ci_low > 0 and
+                             instance.spearman_ci_low > 0)
+            separation_pass = bool(test.decile_drop_delta > 0 and
+                                   scene.decile_drop_delta_ci_low > 0 and
                                    instance.decile_drop_delta_ci_low > 0)
-            boundary_pass = bool(test.auroc >= float(gate["min_boundary_auroc"]) and
-                                 scene.auprc_minus_base_rate_ci_low > 0 and
-                                 instance.auprc_minus_base_rate_ci_low > 0)
-            val_direction_pass = bool(val.spearman > 0 and val.decile_drop_delta > 0 and
-                                      val.auroc >= 0.5 and val.auprc_minus_base_rate > 0)
+            boundary_auroc_point_pass = bool(test.auroc >= float(gate["min_boundary_auroc"]))
+            boundary_auroc_ci_pass = bool(
+                scene.auroc_ci_low > float(gate["min_boundary_auroc_ci_low"]) and
+                instance.auroc_ci_low > float(gate["min_boundary_auroc_ci_low"])
+            )
+            boundary_auprc_ci_pass = bool(
+                scene.auprc_minus_base_rate_ci_low > float(gate["min_auprc_excess_ci_low"]) and
+                instance.auprc_minus_base_rate_ci_low > float(gate["min_auprc_excess_ci_low"])
+            )
+            boundary_pass = bool(
+                boundary_auroc_point_pass and boundary_auroc_ci_pass and boundary_auprc_ci_pass
+            )
+            val_direction_pass = bool(val.spearman > 0 and
+                                      val.decile_drop_delta > 0 and
+                                      val.auroc >= 0.5 and
+                                      val.auprc_minus_base_rate > 0)
             passed = rank_pass and separation_pass and boundary_pass and val_direction_pass
             gate_rows.append({
-                "protocol": protocol, "seed": seed, "rank_pass": rank_pass,
-                "separation_pass": separation_pass, "boundary_pass": boundary_pass,
-                "val_test_direction_pass": val_direction_pass, "seed_protocol_pass": passed,
+                "protocol": protocol,
+                "seed": seed,
+                "rank_pass": rank_pass,
+                "separation_pass": separation_pass,
+                "boundary_auroc_point_pass": boundary_auroc_point_pass,
+                "boundary_auroc_ci_pass": boundary_auroc_ci_pass,
+                "boundary_auprc_ci_pass": boundary_auprc_ci_pass,
+                "boundary_pass": boundary_pass,
+                "val_test_direction_pass": val_direction_pass,
+                "seed_protocol_pass": passed,
             })
 
     gate_frame = pd.DataFrame(gate_rows)
