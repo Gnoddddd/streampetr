@@ -274,20 +274,20 @@ def main() -> None:
                 pre_state = clean_state
                 if frame_idx < 2:
                     output, clean_state, _ = run_head(model, meta, data, feats, frame_idx > 0, pre_state)
-                    del output
-                else:
-                    output, clean_state, taps = captured_head(model, meta, data, feats, True, pre_state)
-                    plain_output, plain_state, _ = run_head(model, meta, data, feats, True, pre_state)
-                    out_equal, out_diff = compare_outputs(output, plain_output)
-                    state_equal, state_diff = compare_states(clean_state, plain_state)
-                    if not out_equal or not state_equal:
-                        raise RuntimeError(f"passive tap changed B0 output/state: {scene}")
-                    equivalence.append({
-                        "scene_token": scene, "sample_token": tokens[frame_idx], "frame_idx": frame_idx,
-                        "check": "passive_hooks_vs_unhooked_B0", "output_bitwise_equal": out_equal,
-                        "output_max_abs_diff": out_diff, "memory_bitwise_equal": state_equal,
-                        "memory_max_abs_diff": state_diff,
-                    })
+                    del output, feats, image, data
+                    continue
+                output, clean_state, taps = captured_head(model, meta, data, feats, True, pre_state)
+                plain_output, plain_state, _ = run_head(model, meta, data, feats, True, pre_state)
+                out_equal, out_diff = compare_outputs(output, plain_output)
+                state_equal, state_diff = compare_states(clean_state, plain_state)
+                if not out_equal or not state_equal:
+                    raise RuntimeError(f"passive tap changed B0 output/state: {scene}")
+                equivalence.append({
+                    "scene_token": scene, "sample_token": tokens[frame_idx], "frame_idx": frame_idx,
+                    "check": "passive_hooks_vs_unhooked_B0", "output_bitwise_equal": out_equal,
+                    "output_max_abs_diff": out_diff, "memory_bitwise_equal": state_equal,
+                    "memory_max_abs_diff": state_diff,
+                })
             targets = target_frame(nusc, tokens[frame_idx])
             context = frame_context(clean_dataset.data_infos[index], clean_dataset)
             candidates, matches = frame_record(output, taps, pre_state, data, targets, context, pc_range,
@@ -405,8 +405,10 @@ def main() -> None:
                 decision_arrays.append(predictor_payload["decision_features"])
                 support_arrays.append(predictor_payload["camera_support"])
                 quality_arrays.append(predictor_payload["camera_quality"])
-                drop_arrays.append(drops); cross_arrays.append(crosses)
-                fn_arrays.append(fns); valid_arrays.append(valids)
+                drop_arrays.append(drops)
+                cross_arrays.append(crosses)
+                fn_arrays.append(fns)
+                valid_arrays.append(valids)
 
             # Only the clean branch advances.  Fault states are discarded here.
             clean_state = clean_next_state
@@ -415,8 +417,7 @@ def main() -> None:
                 "output": clean_next_output, "taps": clean_next_taps, "targets": next_targets,
                 "candidates": clean_next_candidates, "matches": clean_next_matches,
             }
-            for output in fault_outputs.values():
-                del output
+            fault_outputs.clear()
 
         assert_unique_sample_ids([row["sample_id"] for row in sample_rows])
         n = len(sample_rows)
@@ -442,7 +443,9 @@ def main() -> None:
         summary = {
             "schema_version": SCHEMA,
             "scene_manifest_sha256": validation["scene_manifest_sha256"],
-            "scene_token": scene, "split": split, "rows": n,
+            "scene_token": scene,
+            "split": split,
+            "rows": n,
             "drop_mean": {p: float(arrays["evidence_drop"][:, i].mean()) if n else 0.0
                           for i, p in enumerate(PROTOCOLS)},
             "cross_topk_positives": {p: int(arrays["cross_topk"][:, i].sum())
@@ -451,7 +454,9 @@ def main() -> None:
                                    for i, p in enumerate(PROTOCOLS)},
             "equivalence_pass": all(bool(row["output_bitwise_equal"]) and bool(row["memory_bitwise_equal"])
                                     for row in equivalence),
-            "peak_cuda_gib": peak_gib, "elapsed_seconds": elapsed, "complete": True,
+            "peak_cuda_gib": peak_gib,
+            "elapsed_seconds": elapsed,
+            "complete": True,
         }
         atomic_json(prefix.with_suffix(".complete.json"), summary)
         print(json.dumps(summary, indent=2, sort_keys=True), flush=True)
