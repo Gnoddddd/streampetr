@@ -1,0 +1,15 @@
+Historical s2.2-stable collection (9958366): 86 tests
+RayDN screening collection (63cbbb6):        89 tests
+
+File-level difference:
+  + tests/test_ray_denoising.py
+
+That RayDN-only file contains exactly 3 tests. It is intentionally absent
+from stage3/mini-convergence-loss-balance because this branch starts at
+s2.2-stable and must not import RayDN code.
+
+This branch adds:
+  + tests/test_loss_balance.py (2 tests)
+
+Expected collection before any later test additions: 88 tests.
+No s2.2-stable test file or collected test was removed.

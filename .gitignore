@@ -74,3 +74,8 @@ nohup.out
 *_backup_*/
 *.orig
 *.rej
+
+reports/full_nuscenes/**/incremental/
+reports/full_nuscenes/**/results_nusc.json
+reports/full_nuscenes/**/*.pkl
+reports/full_nuscenes/

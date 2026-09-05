@@ -1,0 +1,4 @@
+experiment,method,config,seed,init_checkpoint,init_sha256,effective_batch,iters_per_epoch,epochs,max_iters,checkpoints,with_dn,auxiliary_schedule,status
+B0,original_streampetr,configs/stage3/mini_convergence_b0.py,2026,checkpoints/official/stream_petr_r50_flash_704_bs2_seq_90e.pth,e6323ae5c31adf1eedd46d6dd4fd3c73d95aa26f18cc8aa23c196494b7de3451,1,323,12,3876,1/3/6/12,false,none,completed
+M1,s2.2_stable_full,configs/stage3/mini_convergence_m1.py,2026,checkpoints/official/stream_petr_r50_flash_704_bs2_seq_90e.pth,e6323ae5c31adf1eedd46d6dd4fd3c73d95aa26f18cc8aa23c196494b7de3451,1,323,12,3876,1/3/6/12,false,constant_1.0,completed
+M1-Ramp,s2.2_stable_loss_ramp,configs/stage3/mini_convergence_m1_ramp.py,2026,checkpoints/official/stream_petr_r50_flash_704_bs2_seq_90e.pth,e6323ae5c31adf1eedd46d6dd4fd3c73d95aa26f18cc8aa23c196494b7de3451,1,323,12,3876,1/3/6/12,false,0_to_20pct=0;20_to_50pct=linear;50_to_100pct=1,completed
