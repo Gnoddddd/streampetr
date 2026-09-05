@@ -146,7 +146,15 @@ Seeds: `42`, `2027`, `2028`.
 `probe_test` is not read by the training script and is opened only after the
 seed checkpoint has been frozen by validation loss.
 
-No hyperparameter or seed may be chosen from probe-test performance.
+Boundary class imbalance is handled with a protocol-specific positive weight
+computed **only from `probe_train`** as `N_negative / N_positive`.  Neither
+`probe_val` nor `probe_test` may contribute to this weight.  A protocol whose
+`probe_train` boundary labels do not contain both classes is a hard failure.
+The same train-derived weights are used when computing validation loss for
+early stopping/model selection.
+
+No hyperparameter, class weight, threshold, or seed may be chosen from
+probe-test performance.
 
 ## Required evaluation
 
@@ -179,18 +187,21 @@ Uncertainty/stability:
 A protocol passes only when the result is stable across the three frozen seeds
 and the following conditions hold:
 
-1. evidence-drop Spearman is positive and the relevant cluster-bootstrap lower
-   confidence bound is above zero;
+1. evidence-drop Spearman is positive and both scene-cluster and
+   instance/trajectory-cluster bootstrap lower confidence bounds are above zero;
 2. predicted top-vulnerability objects have larger actual drop than the bottom
-   group and the cluster-bootstrap lower bound is above zero;
-3. boundary-crossing AUROC is at least `0.65`;
-4. AUPRC is above the protocol positive base rate with a positive clustered
-   confidence bound;
-5. validation and test directions agree;
-6. disabled/clean detector identity checks pass.
+   group and both clustered lower bounds are above zero;
+3. boundary-crossing AUROC is at least `0.65` on the frozen test split;
+4. both scene-cluster and instance/trajectory-cluster AUROC lower confidence
+   bounds are above `0.50`;
+5. AUPRC is above the protocol positive base rate and both clustered lower
+   confidence bounds of `AUPRC - positive_base_rate` are above zero;
+6. validation and test directions agree;
+7. disabled/clean detector identity checks pass.
 
-Main P0 is `GO` only if at least two qualitatively different fault families
-pass.  Otherwise P1 routing stays locked.
+A protocol must satisfy the full rule for **all three frozen seeds**.  Main P0
+is `GO` only if at least two qualitatively different fault families pass.
+Otherwise P1 routing stays locked.
 
 ## Cross-severity transfer
 
