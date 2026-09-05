@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 
 from analysis.care3d_counterfactual import PROTOCOLS
@@ -99,7 +100,7 @@ def move(batch: dict[str, torch.Tensor], device: torch.device) -> dict[str, torc
     return {key: value.to(device=device, non_blocking=True) for key, value in batch.items()}
 
 
-def forward_loss(model, criterion, batch):
+def forward_loss(model, criterion, batch, positive_weight: torch.Tensor):
     output = model(
         object_features=batch["object_features"].float().unsqueeze(1),
         camera_support=batch["camera_support"].float().unsqueeze(1),
@@ -109,22 +110,39 @@ def forward_loss(model, criterion, batch):
     )
     if model.enable_routing:
         raise RuntimeError("P0 routing must remain disabled")
-    losses = criterion(
-        output,
-        batch["evidence_drop"].float().unsqueeze(1),
-        batch["cross_topk"].float().unsqueeze(1),
-        batch["valid_mask"].bool().unsqueeze(1),
+
+    drop_target = batch["evidence_drop"].float().unsqueeze(1)
+    crossing_target = batch["cross_topk"].float().unsqueeze(1)
+    valid = batch["valid_mask"].bool().unsqueeze(1)
+    losses = criterion(output, drop_target, crossing_target, valid)
+
+    logits = output["boundary_crossing_logits"]
+    if positive_weight.shape != (len(PROTOCOLS),):
+        raise RuntimeError("boundary positive weight must have one value per protocol")
+    raw_crossing = F.binary_cross_entropy_with_logits(
+        logits,
+        crossing_target,
+        reduction="none",
+        pos_weight=positive_weight.to(device=logits.device, dtype=logits.dtype),
     )
+    mask = valid.to(logits.dtype)
+    denominator = mask.sum().clamp_min(1.0)
+    weighted_crossing = (raw_crossing * mask).sum() / denominator
+    total = (criterion.regression_weight * losses["loss_care3d_vulnerability"]
+             + criterion.crossing_weight * weighted_crossing)
+    losses = dict(losses)
+    losses["loss_care3d_crossing"] = weighted_crossing
+    losses["loss_care3d"] = total
     return output, losses
 
 
-def evaluate(model, criterion, loader, device):
+def evaluate(model, criterion, loader, device, positive_weight):
     model.eval()
     sums = {"total": 0.0, "regression": 0.0, "crossing": 0.0, "rows": 0}
     with torch.no_grad():
         for batch in loader:
             batch = move(batch, device)
-            _, losses = forward_loss(model, criterion, batch)
+            _, losses = forward_loss(model, criterion, batch, positive_weight)
             n = int(batch["object_features"].shape[0])
             sums["total"] += float(losses["loss_care3d"].item()) * n
             sums["regression"] += float(losses["loss_care3d_vulnerability"].item()) * n
@@ -165,12 +183,18 @@ def main() -> None:
     train_labels = train_arrays["cross_topk"].astype(np.float64)
     train_valid = train_arrays["valid_mask"].astype(bool)
     positives, negatives, pos_weights = {}, {}, {}
+    pos_weight_values = []
     for index, protocol in enumerate(PROTOCOLS):
         valid = train_valid[:, index]
         pos = int(train_labels[valid, index].sum())
         neg = int(valid.sum()) - pos
+        if pos <= 0 or neg <= 0:
+            raise RuntimeError(f"probe_train boundary labels lack both classes: {protocol}")
         positives[protocol], negatives[protocol] = pos, neg
-        pos_weights[protocol] = float(neg / max(pos, 1))
+        value = float(neg / pos)
+        pos_weights[protocol] = value
+        pos_weight_values.append(value)
+    positive_weight = torch.tensor(pos_weight_values, dtype=torch.float32, device=device)
 
     train_loader = DataLoader(ArrayDataset(train_arrays), batch_size=batch_size, shuffle=True,
                               num_workers=int(train_cfg["num_workers"]), drop_last=False)
@@ -198,14 +222,14 @@ def main() -> None:
         for batch in train_loader:
             batch = move(batch, device)
             optimizer.zero_grad(set_to_none=True)
-            _, losses = forward_loss(model, criterion, batch)
+            _, losses = forward_loss(model, criterion, batch, positive_weight)
             losses["loss_care3d"].backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), float(train_cfg["gradient_clip_norm"]))
             optimizer.step()
             n = int(batch["object_features"].shape[0])
             total += float(losses["loss_care3d"].item()) * n
             rows += n
-        val = evaluate(model, criterion, val_loader, device)
+        val = evaluate(model, criterion, val_loader, device, positive_weight)
         row = {"epoch": epoch, "train_loss": total / max(rows, 1), **{f"val_{k}": v for k, v in val.items()}}
         history.append(row)
         print(json.dumps(row, sort_keys=True), flush=True)
@@ -220,6 +244,7 @@ def main() -> None:
                 "model_config": model_cfg,
                 "model_state_dict": model.state_dict(),
                 "val_loss": best_val,
+                "boundary_positive_weight": pos_weights,
                 "routing_enabled": False,
             }, best_path)
         else:
@@ -239,8 +264,10 @@ def main() -> None:
         "best_val_loss": best_val,
         "boundary_train_positives": positives,
         "boundary_train_negatives": negatives,
-        "boundary_train_pos_weight_reference": pos_weights,
-        "boundary_loss_weighting": "unweighted_existing_CounterfactualVulnerabilityLoss",
+        "boundary_train_pos_weight": pos_weights,
+        "boundary_loss_weighting": "probe_train_neg_over_pos_only",
+        "probe_val_used_for_class_weighting": False,
+        "probe_test_used_for_class_weighting": False,
         "detector_parameters_in_optimizer": 0,
         "routing_enabled": False,
     }
