@@ -132,6 +132,8 @@ def build_p0(seed: int, device: torch.device, validation: dict):
     payload = torch.load(path, map_location="cpu")
     model = CARE3DCore(**payload["model_config"])
     model.load_state_dict(payload["model_state_dict"], strict=True)
+    if model.router is not None:
+        raise RuntimeError(f"P0 seed {seed} unexpectedly contains a router")
     return freeze_module(model.to(device))
 
 
@@ -143,6 +145,16 @@ def build_p1(seed: int, device: torch.device):
     if tuple(payload.get("source_names", ())) != tuple(SOURCE_NAMES):
         raise RuntimeError(f"P1 seed {seed} source bank changed")
     return model.to(device).eval()
+
+
+def p0_forward(model, predictor_inputs):
+    return model(
+        object_features=predictor_inputs["object_features"],
+        camera_support=predictor_inputs["camera_support"],
+        camera_quality=predictor_inputs["camera_quality"],
+        temporal_features=predictor_inputs["temporal_features"],
+        decision_features=predictor_inputs["decision_features"],
+    )
 
 
 def deployment_stats(logits, boxes, targets, context):
@@ -372,12 +384,8 @@ def main() -> None:
                         centers,
                         tuple(int(value) for value in fault_image.shape[-2:]),
                     )
-                    temporal = to_tensor(
-                        main_arrays["object_features"][row_indices], device
-                    )
-                    sources, reliability = build_source_bank(
-                        camera_tokens, camera_reliability, temporal
-                    )
+                    temporal = to_tensor(main_arrays["object_features"][row_indices], device)
+                    sources, reliability = build_source_bank(camera_tokens, camera_reliability, temporal)
                     predictor_inputs = {
                         key: to_tensor(main_arrays[key][row_indices], device)
                         for key in PREDICTOR_KEYS
@@ -397,13 +405,7 @@ def main() -> None:
                     selected_sources = []
                     if row_indices.size:
                         with torch.no_grad():
-                            p0_output = p0_models[seed](
-                                predictor_inputs["object_features"],
-                                predictor_inputs["temporal_features"],
-                                predictor_inputs["decision_features"],
-                                predictor_inputs["camera_support"],
-                                predictor_inputs["camera_quality"],
-                            )
+                            p0_output = p0_forward(p0_models[seed], predictor_inputs)
                             protocol_tensor = torch.full(
                                 (len(row_indices),), p_index, device=device, dtype=torch.long
                             )
@@ -484,7 +486,6 @@ def main() -> None:
 
                 del fault_output, fault_taps, fault_pyramid, fault_feats, fault_image, fault_data
 
-            # Explicitly verify the trained P1 clean bypass on one available query.
             if row_indices.size:
                 seed = SEEDS[0]
                 query = int(queries[0])
