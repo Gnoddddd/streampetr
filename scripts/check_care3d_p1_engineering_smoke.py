@@ -5,25 +5,84 @@ from __future__ import annotations
 
 import json
 import os
+import runpy
+import sys
 from pathlib import Path
 
-import numpy as np
-import pandas as pd
-import torch
-
-from analysis.care3d_p1 import SOURCE_NAMES, assert_source_contract
-from models.care3d_p1 import CARE3DP1ScoreRouter
-
-
 ROOT = Path(__file__).resolve().parents[1]
+STREAM = ROOT / "repos/StreamPETR"
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(STREAM))
+
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
+import torch  # noqa: E402
+from mmcv import Config  # noqa: E402
+from mmcv.runner import load_checkpoint  # noqa: E402
+from mmcv.utils import import_modules_from_strings  # noqa: E402
+from mmdet3d.models import build_model  # noqa: E402
+
+from analysis.care3d_counterfactual import freeze_module  # noqa: E402
+from analysis.care3d_p1 import SOURCE_NAMES, assert_source_contract  # noqa: E402
+from models.care3d_p1 import CARE3DP1ScoreRouter  # noqa: E402
+
+
 REPORT = ROOT / "reports/care3d/p1_sparse_evidence_router"
+P1_CONFIG = ROOT / "configs/care3d/p1_sparse_evidence_router.py"
 SCHEMA = 1
+CLASSIFIER_REPLAY_TOLERANCE = 5e-4
 
 
 def atomic_json(path: Path, value: object) -> None:
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(temporary, path)
+
+
+def classifier_replay(
+    clean_query: np.ndarray,
+    fault_query: np.ndarray,
+    clean_score: np.ndarray,
+    fault_score: np.ndarray,
+    target_class: np.ndarray,
+) -> tuple[bool, float]:
+    """Verify exported final-query tensors still replay the frozen classifier."""
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA required for P1 classifier replay smoke")
+    config = runpy.run_path(str(P1_CONFIG))
+    cfg = Config.fromfile(str(ROOT / config["stream_petr_config"]))
+    import_modules_from_strings(**cfg.custom_imports)
+    cfg.model.pretrained = None
+    detector = build_model(cfg.model, test_cfg=cfg.get("test_cfg"))
+    load_checkpoint(
+        detector,
+        str(ROOT / config["stream_petr_checkpoint"]),
+        map_location="cpu",
+    )
+    detector = freeze_module(detector.cuda().eval())
+    classifier = detector.pts_bbox_head.cls_branches[-1]
+    target = torch.as_tensor(target_class, device="cuda:0", dtype=torch.long)
+    differences = []
+    with torch.no_grad():
+        clean = torch.as_tensor(clean_query, device="cuda:0", dtype=torch.float32)
+        clean_logits = classifier(clean)
+        clean_replayed = torch.sigmoid(clean_logits.gather(1, target[:, None])[:, 0])
+        clean_reference = torch.as_tensor(clean_score, device="cuda:0", dtype=torch.float32)
+        differences.append(float((clean_replayed - clean_reference).abs().max().item()))
+        for protocol_index in range(fault_query.shape[1]):
+            query = torch.as_tensor(
+                fault_query[:, protocol_index], device="cuda:0", dtype=torch.float32
+            )
+            logits = classifier(query)
+            replayed = torch.sigmoid(logits.gather(1, target[:, None])[:, 0])
+            reference = torch.as_tensor(
+                fault_score[:, protocol_index], device="cuda:0", dtype=torch.float32
+            )
+            differences.append(float((replayed - reference).abs().max().item()))
+    maximum = max(differences, default=float("inf"))
+    del detector
+    torch.cuda.empty_cache()
+    return bool(maximum <= CLASSIFIER_REPLAY_TOLERANCE), float(maximum)
 
 
 def main() -> None:
@@ -49,10 +108,18 @@ def main() -> None:
     with np.load(feature_path) as packed:
         source_features = np.asarray(packed["source_features"]).astype(np.float32)
         reliability = np.asarray(packed["source_reliability"]).astype(np.float32)
+        clean_query = np.asarray(packed["clean_query"]).astype(np.float32)
         fault_query = np.asarray(packed["fault_query"]).astype(np.float32)
+        clean_score = np.asarray(packed["clean_score"]).astype(np.float32)
+        fault_score = np.asarray(packed["fault_score"]).astype(np.float32)
+        target_class = np.asarray(packed["target_class"]).astype(np.int64)
     assert_source_contract(source_features, reliability)
     if len(fault_query) == 0:
         raise RuntimeError("engineering scene contains no P1 object rows")
+
+    replay_pass, replay_difference = classifier_replay(
+        clean_query, fault_query, clean_score, fault_score, target_class
+    )
 
     count = min(16, len(fault_query))
     query = torch.as_tensor(fault_query[:count, 0], dtype=torch.float32)
@@ -104,6 +171,9 @@ def main() -> None:
         "label_identity_pass": True,
         "source_contract_pass": True,
         "source_names_pass": bool(source_names_pass),
+        "classifier_replay_pass": replay_pass,
+        "classifier_replay_max_abs_diff": replay_difference,
+        "classifier_replay_tolerance": CLASSIFIER_REPLAY_TOLERANCE,
         "zero_init_fault_identity_pass": zero_identity,
         "trained_weight_clean_bypass_identity_pass": clean_bypass,
         "failed_cam_back_absent": "CAM_BACK" not in SOURCE_NAMES,
@@ -114,6 +184,7 @@ def main() -> None:
         "label_identity_pass",
         "source_contract_pass",
         "source_names_pass",
+        "classifier_replay_pass",
         "zero_init_fault_identity_pass",
         "trained_weight_clean_bypass_identity_pass",
         "failed_cam_back_absent",
