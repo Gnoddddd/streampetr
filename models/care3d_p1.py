@@ -1,6 +1,6 @@
 """CARE-3D P1 sparse evidence routing blocks.
 
-P1 is deliberately narrower than a full detector rewrite.  A frozen P0
+P1 is deliberately narrower than a full detector rewrite. A frozen P0
 vulnerability predictor decides how strongly a target query should be protected,
 while a sparse router retrieves at most ``top_k`` complementary source tokens.
 The routed residual is applied to the final decoder query used by the
@@ -22,10 +22,10 @@ from models.care3d import SparseEvidenceRouter
 class CARE3DP1ScoreRouter(nn.Module):
     """Risk-gated sparse residual routing for one object query per sample.
 
-    Parameters are initialized through :class:`SparseEvidenceRouter`, whose
-    residual scale starts at zero.  Therefore the fault-active path is an exact
-    identity before training.  The clean path is an explicit bypass and remains
-    an exact identity after training as well.
+    ``SparseEvidenceRouter`` starts with a zero residual scale, so a newly
+    constructed P1 router is exact identity even when fault routing is active.
+    The clean path is an explicit bypass and therefore remains exact identity
+    after arbitrary P1 training.
     """
 
     def __init__(
@@ -44,9 +44,9 @@ class CARE3DP1ScoreRouter(nn.Module):
         self.router = SparseEvidenceRouter(
             object_dim=self.object_dim,
             source_dim=self.source_dim,
-            vulnerability_dim=self.vulnerability_dim,
+            num_protocols=self.vulnerability_dim,
+            topk_sources=self.top_k,
             hidden_dim=int(hidden_dim),
-            top_k=self.top_k,
         )
 
     def forward(
@@ -60,17 +60,6 @@ class CARE3DP1ScoreRouter(nn.Module):
         *,
         fault_active: bool = True,
     ) -> Tuple[Tensor, Dict[str, Tensor]]:
-        """Route complementary evidence into a batch of target queries.
-
-        Args:
-            object_features: ``[B, C]`` fault-side final decoder queries.
-            source_features: ``[B, S, Cs]`` complementary source tokens.
-            source_reliability: ``[B, S]`` non-negative source validity.
-            vulnerability: ``[B, P]`` frozen P0 evidence-drop predictions.
-            boundary_crossing_logits: ``[B, P]`` frozen P0 crossing logits.
-            protocol_index: ``[B]`` index of the active fault family.
-            fault_active: if ``False``, bypass routing exactly.
-        """
         if object_features.ndim != 2 or object_features.shape[-1] != self.object_dim:
             raise ValueError("object_features must have shape [B, object_dim]")
         batch = object_features.shape[0]
@@ -85,8 +74,7 @@ class CARE3DP1ScoreRouter(nn.Module):
             raise ValueError("boundary_crossing_logits shape changed")
         if protocol_index.shape != (batch,):
             raise ValueError("protocol_index must have shape [B]")
-        if protocol_index.dtype not in (torch.int32, torch.int64):
-            protocol_index = protocol_index.long()
+        protocol_index = protocol_index.long()
         if torch.any(protocol_index < 0) or torch.any(protocol_index >= self.vulnerability_dim):
             raise ValueError("protocol_index outside frozen P0 heads")
 
@@ -97,25 +85,26 @@ class CARE3DP1ScoreRouter(nn.Module):
                 "clean_bypass": object_features.new_ones((batch,), dtype=torch.bool),
             }
 
-        routed_raw, aux = self.router(
+        route = self.router(
             object_features.unsqueeze(1),
             source_features.unsqueeze(1),
             source_reliability.unsqueeze(1),
             vulnerability.unsqueeze(1),
         )
-        routed_raw = routed_raw[:, 0]
+        routed_raw = route["enhanced_features"][:, 0]
         correction = routed_raw - object_features
         active_logit = boundary_crossing_logits.gather(1, protocol_index[:, None])[:, 0]
         risk_probability = torch.sigmoid(active_logit)
         routed = object_features + risk_probability[:, None] * correction
-        output_aux = {
+        return routed, {
             "risk_probability": risk_probability,
             "correction": correction,
             "clean_bypass": object_features.new_zeros((batch,), dtype=torch.bool),
+            "topk_indices": route["route_indices"][:, 0],
+            "route_weights": route["route_weights"][:, 0],
+            "route_residual": route["route_residual"][:, 0],
+            "route_scale": route["route_scale"],
         }
-        for key, value in aux.items():
-            output_aux[key] = value[:, 0] if value.ndim >= 2 and value.shape[1] == 1 else value
-        return routed, output_aux
 
 
 def _masked_mean(value: Tensor, mask: Tensor) -> Tensor:
@@ -146,10 +135,10 @@ def p1_score_routing_loss(
 ) -> Dict[str, Tensor]:
     """Frozen P1 training objective.
 
-    Positive samples are P0 ``cross_topk`` events.  They receive clean-score,
-    Top-K-boundary and representation-restoration objectives.  Retained samples
-    receive a logit-drift penalty.  On positive samples, increases of non-target
-    class logits are penalized to discourage class/FP inflation.
+    Positive samples are P0 ``cross_topk`` events. They receive clean-score,
+    Top-K-boundary and representation-restoration objectives. Retained samples
+    receive a full-class logit-drift penalty. On positive samples, increases of
+    non-target logits are penalized to discourage class/FP inflation.
     """
     if routed_query.shape != clean_query.shape or routed_query.shape != fault_query.shape:
         raise ValueError("query tensor shapes must match")
