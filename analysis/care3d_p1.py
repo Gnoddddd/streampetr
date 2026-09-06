@@ -25,6 +25,7 @@ SOURCE_CAMERA_INDICES = (
     MODEL_CAMERA_ORDER.index("CAM_BACK_LEFT"),
     MODEL_CAMERA_ORDER.index("CAM_BACK_RIGHT"),
 )
+QUERY_COLLISION_POLICY = "exclude_all_rows_in_shared_target_query_frame"
 
 
 def assert_exact_sample_alignment(expected: Sequence[str], observed: Sequence[str]) -> None:
@@ -36,6 +37,84 @@ def assert_unique_queries(query_indices: Sequence[int]) -> None:
     values = [int(value) for value in query_indices]
     if len(values) != len(set(values)):
         raise RuntimeError("multiple P1 cohort objects map to the same target query in one frame")
+
+
+def query_collision_eligibility(
+    target_frame_indices: Sequence[int],
+    query_indices: Sequence[int],
+) -> Dict[str, object]:
+    """Return the outcome-blind P1 eligibility mask for shared-query collisions.
+
+    A detector query can receive only one routed residual/class vector at a
+    frame.  If multiple frozen P0 object rows share the same
+    ``(target_frame_idx, target_clean_query_index)`` pair, an object-specific
+    intervention is not uniquely defined.  P1 therefore excludes *all* rows in
+    that collision group rather than selecting one using labels or outcomes.
+    """
+    frames = np.asarray([int(value) for value in target_frame_indices], dtype=np.int64)
+    queries = np.asarray([int(value) for value in query_indices], dtype=np.int64)
+    if frames.shape != queries.shape or frames.ndim != 1:
+        raise ValueError("target-frame and query-index vectors must be aligned 1-D arrays")
+    counts: Dict[Tuple[int, int], int] = {}
+    for frame, query in zip(frames.tolist(), queries.tolist()):
+        key = (int(frame), int(query))
+        counts[key] = counts.get(key, 0) + 1
+    multiplicity = np.asarray(
+        [counts[(int(frame), int(query))] for frame, query in zip(frames, queries)],
+        dtype=np.int64,
+    )
+    eligible = multiplicity == 1
+    return {
+        "eligible": eligible,
+        "multiplicity": multiplicity,
+        "p0_rows_total": int(len(frames)),
+        "p1_eligible_rows": int(eligible.sum()),
+        "query_collision_excluded_rows": int((~eligible).sum()),
+        "query_collision_groups": int(sum(count > 1 for count in counts.values())),
+        "policy": QUERY_COLLISION_POLICY,
+    }
+
+
+def filter_aligned_rows(
+    frame,
+    arrays: Dict[str, np.ndarray],
+) -> Tuple[object, Dict[str, np.ndarray], Dict[str, object]]:
+    """Apply the frozen shared-query eligibility rule to a P0 scene payload."""
+    if "target_frame_idx" not in frame or "target_clean_query_index" not in frame:
+        raise RuntimeError("P0 metadata lacks P1 target-frame/query identity")
+    audit = query_collision_eligibility(
+        frame["target_frame_idx"].to_numpy(dtype=int),
+        frame["target_clean_query_index"].to_numpy(dtype=int),
+    )
+    mask = np.asarray(audit["eligible"], dtype=bool)
+    raw_n = len(frame)
+    filtered = frame.loc[mask].reset_index(drop=True).copy()
+    filtered["p1_query_multiplicity"] = 1
+    filtered["p1_query_collision_policy"] = QUERY_COLLISION_POLICY
+    output: Dict[str, np.ndarray] = {}
+    for key, value in arrays.items():
+        array = np.asarray(value)
+        if array.ndim > 0 and len(array) == raw_n:
+            output[key] = array[mask].copy()
+        else:
+            output[key] = array.copy()
+    output["_p1_p0_rows_total"] = np.asarray(audit["p0_rows_total"], dtype=np.int64)
+    output["_p1_eligible_rows"] = np.asarray(audit["p1_eligible_rows"], dtype=np.int64)
+    output["_p1_query_collision_excluded_rows"] = np.asarray(
+        audit["query_collision_excluded_rows"], dtype=np.int64
+    )
+    output["_p1_query_collision_groups"] = np.asarray(
+        audit["query_collision_groups"], dtype=np.int64
+    )
+    if len(filtered):
+        assert_unique_queries(
+            filtered["target_clean_query_index"].to_numpy(dtype=int).tolist()
+            if filtered["target_frame_idx"].nunique() == 1
+            else []
+        )
+        for _, group in filtered.groupby("target_frame_idx", sort=False):
+            assert_unique_queries(group["target_clean_query_index"].to_numpy(dtype=int).tolist())
+    return filtered, output, audit
 
 
 def sample_projected_camera_tokens(
