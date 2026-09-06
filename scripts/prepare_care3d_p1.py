@@ -17,6 +17,11 @@ TRANSFER = ROOT / "reports/care3d/p0_cross_severity"
 REPORT = ROOT / "reports/care3d/p1_sparse_evidence_router"
 PREREG = ROOT / "docs/CARE3D_P1_PREREGISTRATION.md"
 CONFIG = ROOT / "configs/care3d/p1_sparse_evidence_router.py"
+PROTOCOL_PATHS = {
+    "blur_back": ROOT / "protocols/presets/motion_blur_back_10f_s09.json",
+    "crash_back": ROOT / "protocols/presets/camera_crash_back_10f.json",
+    "dark_back": ROOT / "protocols/presets/dark_back_10f_s09.json",
+}
 EXPECTED_SCENE_MANIFEST_SHA256 = "83637205c930611ccdc6879eb233f72a9b0a5997248f4b5b5edf3242182d6da1"
 SEEDS = (42, 2027, 2028)
 SCHEMA = 1
@@ -48,6 +53,7 @@ def main() -> None:
         TRANSFER / "progress_manifest.json",
         PREREG,
         CONFIG,
+        *PROTOCOL_PATHS.values(),
     ]
     missing = [str(path) for path in required if not path.exists()]
     if missing:
@@ -110,6 +116,7 @@ def main() -> None:
         "p0_training_manifest_sha256": training_manifest_hashes,
         "p1_preregistration_sha256": sha256(PREREG),
         "p1_config_sha256": sha256(CONFIG),
+        "protocol_sha256": {name: sha256(path) for name, path in PROTOCOL_PATHS.items()},
         "split_counts": expected,
         "probe_test_locked_until_training_complete": True,
         "stream_petr_frozen": True,
@@ -126,6 +133,9 @@ def main() -> None:
             "scene_manifest_sha256",
             "p0_checkpoint_sha256",
             "p0_training_manifest_sha256",
+            "p1_preregistration_sha256",
+            "p1_config_sha256",
+            "protocol_sha256",
         )
         changed = [key for key in frozen_keys if previous.get(key) != source.get(key)]
         if changed:
