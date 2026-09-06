@@ -276,13 +276,14 @@ def update_progress(source: dict) -> None:
     atomic_json(progress_path, progress)
 
 
-def main_p0_inputs(scene: str):
-    prefix = MAIN_REPORT / "incremental/P0" / scene
+def main_p0_inputs(scene: str, engineering: bool = False):
+    subdir = "engineering_smoke" if engineering else "incremental/P0"
+    prefix = MAIN_REPORT / subdir / scene
     samples_path = prefix.with_suffix(".samples.csv")
     feature_path = prefix.with_suffix(".features.npz")
     marker_path = prefix.with_suffix(".complete.json")
     if not samples_path.exists() or not feature_path.exists() or not marker_path.exists():
-        raise RuntimeError(f"main P0 probe-test scene is incomplete: {scene}")
+        raise RuntimeError(f"main P0 source scene is incomplete ({subdir}): {scene}")
     marker = json.loads(marker_path.read_text())
     if not marker.get("complete") or not marker.get("equivalence_pass"):
         raise RuntimeError(f"main P0 scene did not pass equivalence: {scene}")
@@ -575,7 +576,10 @@ def main() -> None:
             "camera_quality": np.stack(current_inputs["camera_quality"]).astype(np.float32)
             if n else np.empty((0, 6), np.float32),
         }
-        main_frame, main_inputs = main_p0_inputs(scene)
+        main_frame, main_inputs = main_p0_inputs(
+            scene,
+            engineering=args.engineering_scene,
+        )
         assert_exact_sample_alignment(
             main_frame.sample_id.astype(str).tolist(),
             [str(row["sample_id"]) for row in sample_rows],
