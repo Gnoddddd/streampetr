@@ -80,6 +80,7 @@ reports/full_nuscenes/**/results_nusc.json
 reports/full_nuscenes/**/*.pkl
 reports/full_nuscenes/
 
-# CARE-3D generated P0 artifacts (large, resume-safe, not source)
+# CARE-3D generated P0/P1 artifacts (large, resume-safe, not source)
 reports/care3d/p0_counterfactual_vulnerability/
 reports/care3d/p0_cross_severity/
+reports/care3d/p1_sparse_evidence_router/
