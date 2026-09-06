@@ -50,6 +50,49 @@ object/query association rule before any end-to-end deployment claim.
 GT identity and GT geometry are never router inputs. GT is used only for cohort
 construction and evaluation, exactly as in P0.
 
+## Implementation amendment: shared target-query collisions
+
+This amendment was frozen on 2026-09-06 after the formal train/val supervision
+export encountered a structural ambiguity and **before any P1 router training or
+probe-test evaluation**. No P1 outcome metric, validation score, test result or
+gate threshold was inspected or changed to define this rule.
+
+The P0 cohort is constructed from flattened `(query, class)` deployment
+predictions. Consequently, in a small number of frames, two or more P0 object
+rows can share the same clean `t+1` detector query while referring to different
+object/class matches. P0 can represent those rows independently because its
+label is read from a fixed `(query, class)` entry. P1 cannot apply two different
+object-specific routed query vectors to the same detector query in one frame:
+the detector has only one query state and one full class vector at that index.
+Allowing sequential writes would create arbitrary last-write semantics.
+
+The frozen, outcome-blind P1 eligibility rule is therefore:
+
+- form groups by `(scene_token, target_frame_idx, target_clean_query_index)`;
+- if a group has multiplicity `1`, the row is P1-eligible;
+- if a group has multiplicity `>1`, **exclude every row in that collision
+  group** from P1 object-level supervision and object-level formal evaluation;
+- never select one colliding row using class, score, evidence drop,
+  `cross_topk`, `tp_to_fn`, vulnerability prediction, future outcome or GT
+  geometry;
+- apply exactly the same rule to `probe_train`, `probe_val` and the still-locked
+  `probe_test` split;
+- in full-frame deployed TP/FP evaluation, excluded collision queries remain at
+  their unmodified Fault baseline values rather than being removed from the
+  detector output.
+
+The frozen implementation identifier is
+`exclude_all_rows_in_shared_target_query_frame`. Every new P1 scene completion
+marker records the original P0 row count, eligible row count, excluded row count
+and number of collision groups. Pre-amendment P1 supervision markers do not
+contain this identifier and are therefore invalidated and re-extracted. The
+engineering smoke must also be rerun under this policy.
+
+This amendment changes only the technical eligibility of an intervention whose
+unit was otherwise undefined. It does not change the P0 cohort definition, P1
+source bank, loss, optimizer, seeds, train/val/test split, test lock, bootstrap
+procedure or any Go/No-Go threshold.
+
 ## Frozen source bank
 
 The failed `CAM_BACK` source is never offered to the router. Each object has
@@ -126,7 +169,8 @@ Before formal train/val extraction, one frozen discovery scene must satisfy:
 
 1. passive query capture versus unhooked B0 is exact;
 2. P0 sample IDs and clean-anchor predictor inputs are identical to the frozen
-   P0 source;
+   P0 source after applying the frozen outcome-blind query-collision eligibility
+   rule;
 3. recomputed clean/fault same-query scores agree with the P0 labels;
 4. the source bank has the frozen three-source layout;
 5. the failed `CAM_BACK` is absent;
@@ -146,9 +190,12 @@ wrapper that requires the completed smoke-gate JSON to contain `passed=true`.
 ## Formal test outcomes
 
 The formal 132-scene `probe_test` evaluation patches the full Fault
-classification tensor at each cohort object's frozen query. The full routed
-class vector is substituted, not only the GT class, so new class competition
-and FP inflation remain observable. Fault boxes are unchanged.
+classification tensor at each P1-eligible cohort object's frozen query. The full
+routed class vector is substituted, not only the GT class, so new class
+competition and FP inflation remain observable. Fault boxes are unchanged.
+Shared-query collision groups excluded by the frozen amendment remain unpatched
+in the full-frame Fault baseline and are not part of object-level recovery/no-
+harm denominators.
 
 For each protocol and seed we report:
 

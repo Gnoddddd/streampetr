@@ -36,11 +36,13 @@ from analysis.care3d_counterfactual import (  # noqa: E402
 )
 from analysis.care3d_p1 import (  # noqa: E402
     PROTOCOLS,
+    QUERY_COLLISION_POLICY,
     SOURCE_NAMES,
     assert_exact_sample_alignment,
     assert_source_contract,
     assert_unique_queries,
     build_source_bank,
+    filter_aligned_rows,
     sample_projected_camera_tokens,
     topk_score_threshold,
 )
@@ -120,7 +122,6 @@ def selected_scenes(args) -> pd.DataFrame:
             raise RuntimeError("expected one P1 engineering scene")
         return frame
     frame = pd.read_csv(REPORT / "frozen_scene_manifest.csv")
-    # This exporter is physically train/val only.
     frame = frame[frame.split.astype(str).isin(("probe_train", "probe_val"))]
     if args.formal_train_val:
         pass
@@ -160,6 +161,17 @@ def main_p0_source(scene: str, engineering: bool):
             raise RuntimeError(f"P0 source missing {key}: {scene}")
     if len(frame) != len(arrays["object_features"]):
         raise RuntimeError(f"P0 metadata/feature mismatch: {scene}")
+    frame, arrays, audit = filter_aligned_rows(frame, arrays)
+    if int(audit["query_collision_excluded_rows"]) > 0:
+        print(json.dumps({
+            "event": "P1_QUERY_COLLISION_EXCLUSION",
+            "scene_token": scene,
+            "policy": QUERY_COLLISION_POLICY,
+            "p0_rows_total": int(audit["p0_rows_total"]),
+            "p1_eligible_rows": int(audit["p1_eligible_rows"]),
+            "query_collision_excluded_rows": int(audit["query_collision_excluded_rows"]),
+            "query_collision_groups": int(audit["query_collision_groups"]),
+        }, sort_keys=True), flush=True)
     return frame, arrays
 
 
@@ -171,6 +183,7 @@ def marker_valid(path: Path, validation: dict) -> bool:
         value.get("complete")
         and value.get("schema_version") == SCHEMA
         and value.get("scene_manifest_sha256") == validation["scene_manifest_sha256"]
+        and value.get("query_collision_policy") == QUERY_COLLISION_POLICY
     )
 
 
@@ -179,7 +192,7 @@ def require_smoke(validation: dict) -> None:
     scene = str(engineering.iloc[0].scene_token)
     marker = REPORT / "engineering_smoke" / f"{scene}.complete.json"
     if not marker_valid(marker, validation):
-        raise RuntimeError("run P1 --engineering-scene before formal supervision export")
+        raise RuntimeError("rerun P1 engineering smoke with the frozen query-collision policy")
     value = json.loads(marker.read_text())
     required = (
         "equivalence_pass",
@@ -201,6 +214,9 @@ def update_progress(validation: dict) -> None:
         wanted = set(manifest[manifest.split.astype(str) == split].scene_token.astype(str))
         observed = set()
         rows = 0
+        p0_rows_total = 0
+        excluded_rows = 0
+        collision_groups = 0
         positives = {protocol: 0 for protocol in PROTOCOLS}
         for marker in (REPORT / "incremental/supervision").glob("*.complete.json"):
             value = json.loads(marker.read_text())
@@ -210,12 +226,19 @@ def update_progress(validation: dict) -> None:
             if scene in wanted:
                 observed.add(scene)
                 rows += int(value.get("rows", 0))
+                p0_rows_total += int(value.get("p0_rows_total", value.get("rows", 0)))
+                excluded_rows += int(value.get("query_collision_excluded_rows", 0))
+                collision_groups += int(value.get("query_collision_groups", 0))
                 for protocol in PROTOCOLS:
                     positives[protocol] += int(value.get("cross_topk_positives", {}).get(protocol, 0))
         coverage[split] = {
             "completed_scenes": len(observed),
             "expected_scenes": expected,
+            "p0_rows_total": p0_rows_total,
             "rows": rows,
+            "query_collision_excluded_rows": excluded_rows,
+            "query_collision_groups": collision_groups,
+            "query_collision_policy": QUERY_COLLISION_POLICY,
             "cross_topk_positives": positives,
         }
         complete &= len(observed) == expected
@@ -301,7 +324,10 @@ def main() -> None:
         clean_score = np.zeros((n,), dtype=np.float32)
         fault_score = np.zeros((n, protocol_count), dtype=np.float32)
         fault_topk_threshold = np.zeros((n, protocol_count), dtype=np.float32)
-        target_class = np.asarray([CLASSES.index(str(value)) for value in main_frame.prediction_class], dtype=np.int64)
+        target_class = np.asarray(
+            [CLASSES.index(str(value)) for value in main_frame.prediction_class],
+            dtype=np.int64,
+        )
         target_query = main_frame.target_clean_query_index.to_numpy(dtype=np.int64)
         filled = np.zeros(n, dtype=bool)
         label_identity = True
@@ -374,11 +400,17 @@ def main() -> None:
                     clean_taps[TAPS[2]][torch.as_tensor(q, device=device)]
                     .detach().float().cpu().numpy().astype(np.float16)
                 )
-                computed_clean = 1.0 / (1.0 + np.exp(-np.clip(clean_logits[q, c], -40.0, 40.0)))
+                computed_clean = 1.0 / (
+                    1.0 + np.exp(-np.clip(clean_logits[q, c], -40.0, 40.0))
+                )
                 clean_score[row_indices] = computed_clean.astype(np.float32)
                 for protocol in PROTOCOLS:
-                    reference = main_frame.iloc[row_indices][f"{protocol}_clean_score"].to_numpy(float)
-                    label_identity &= bool(np.allclose(computed_clean, reference, rtol=0.0, atol=2e-6))
+                    reference = main_frame.iloc[row_indices][
+                        f"{protocol}_clean_score"
+                    ].to_numpy(float)
+                    label_identity &= bool(
+                        np.allclose(computed_clean, reference, rtol=0.0, atol=2e-6)
+                    )
 
             for protocol_index, protocol in enumerate(PROTOCOLS, start=1):
                 fault_meta, fault_image, fault_data = unpack(
@@ -403,13 +435,20 @@ def main() -> None:
                     fault_query[row_indices, p_index] = (
                         fq.detach().float().cpu().numpy().astype(np.float16)
                     )
-                    fault_logits = fault_output["all_cls_scores"][-1, 0].detach().float().cpu().numpy()
+                    fault_logits = (
+                        fault_output["all_cls_scores"][-1, 0]
+                        .detach().float().cpu().numpy()
+                    )
                     computed_fault = 1.0 / (
                         1.0 + np.exp(-np.clip(fault_logits[q, c], -40.0, 40.0))
                     )
                     fault_score[row_indices, p_index] = computed_fault.astype(np.float32)
-                    reference = main_frame.iloc[row_indices][f"{protocol}_fault_score"].to_numpy(float)
-                    label_identity &= bool(np.allclose(computed_fault, reference, rtol=0.0, atol=2e-6))
+                    reference = main_frame.iloc[row_indices][
+                        f"{protocol}_fault_score"
+                    ].to_numpy(float)
+                    label_identity &= bool(
+                        np.allclose(computed_fault, reference, rtol=0.0, atol=2e-6)
+                    )
                     threshold = topk_score_threshold(fault_logits, 100)
                     fault_topk_threshold[row_indices, p_index] = threshold
 
@@ -441,15 +480,21 @@ def main() -> None:
                 del fault_output, fault_taps, fault_pyramid, fault_feats, fault_image, fault_data
 
             clean_state = clean_next_state
-            anchor = {"frame_idx": target_frame_idx, "index": target_index,
-                      "output": clean_output, "taps": clean_taps}
+            anchor = {
+                "frame_idx": target_frame_idx,
+                "index": target_index,
+                "output": clean_output,
+                "taps": clean_taps,
+            }
             del clean_image, clean_data, clean_feats
 
         if n and not filled.all():
             missing = np.flatnonzero(~filled)[:10].tolist()
             raise RuntimeError(f"P1 rows were not populated: {missing}")
         assert_exact_sample_alignment(expected_ids, main_frame.sample_id.astype(str).tolist())
-        assert_source_contract(source_features.astype(np.float32), source_reliability.astype(np.float32))
+        assert_source_contract(
+            source_features.astype(np.float32), source_reliability.astype(np.float32)
+        )
         if not label_identity:
             raise RuntimeError(f"P1 recomputed P0 score labels diverged: {scene}")
 
@@ -481,7 +526,13 @@ def main() -> None:
             "scene_manifest_sha256": validation["scene_manifest_sha256"],
             "scene_token": scene,
             "split": split,
+            "query_collision_policy": QUERY_COLLISION_POLICY,
+            "p0_rows_total": int(main_arrays["_p1_p0_rows_total"]),
             "rows": n,
+            "query_collision_excluded_rows": int(
+                main_arrays["_p1_query_collision_excluded_rows"]
+            ),
+            "query_collision_groups": int(main_arrays["_p1_query_collision_groups"]),
             "source_names": list(SOURCE_NAMES),
             "cross_topk_positives": {
                 protocol: int(arrays["cross_topk"][:, index].sum())
@@ -494,7 +545,9 @@ def main() -> None:
             "predictor_input_identity_pass": True,
             "label_identity_pass": bool(label_identity),
             "source_contract_pass": True,
-            "peak_cuda_gib": float(torch.cuda.max_memory_allocated(device) / (1024 ** 3)),
+            "peak_cuda_gib": float(
+                torch.cuda.max_memory_allocated(device) / (1024 ** 3)
+            ),
             "elapsed_seconds": time.time() - started,
             "complete": True,
         }
