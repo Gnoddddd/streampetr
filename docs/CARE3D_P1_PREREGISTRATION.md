@@ -4,7 +4,7 @@
 
 P0 established that a still-correct target's clean object state contains stable,
 protocol-conditioned information about its one-step counterfactual evidence
-collapse.  The confirmatory severity-transfer experiment further showed that
+collapse. The confirmatory severity-transfer experiment further showed that
 this vulnerability ordering transfers from Blur/Dark severity 0.9 to 0.3
 without retraining or recalibration.
 
@@ -36,23 +36,23 @@ No detector parameter is optimized in P1.
 
 ## Experimental unit and limitation
 
-The paired unit remains the P0 clean-TP object trajectory.  At `t+1`, Clean and
+The paired unit remains the P0 clean-TP object trajectory. At `t+1`, Clean and
 Fault branches start from the exact same clean post-state `H_t`; only the Clean
 branch advances the trajectory.
 
 For this P1 activation experiment, the target is evaluated at the same frozen
-clean `t+1` matched `(query, class)` used by P0.  This is an intentional causal
+clean `t+1` matched `(query, class)` used by P0. This is an intentional causal
 experimental unit that avoids fault-side query reassignment confounding.
 It is **not** claimed to be a deployment-ready identity association mechanism.
 A later system-level stage must replace this oracle pairing with an online
 object/query association rule before any end-to-end deployment claim.
 
-GT identity and GT geometry are never router inputs.  GT is used only for
-cohort construction and evaluation, exactly as in P0.
+GT identity and GT geometry are never router inputs. GT is used only for cohort
+construction and evaluation, exactly as in P0.
 
 ## Frozen source bank
 
-The failed `CAM_BACK` source is never offered to the router.  Each object has
+The failed `CAM_BACK` source is never offered to the router. Each object has
 exactly three candidate backup sources:
 
 1. `CAM_BACK_LEFT`: current `t+1` Fault FPN-P0 token, bilinearly sampled at the
@@ -62,8 +62,8 @@ exactly three candidate backup sources:
    query already used by the frozen P0 predictor.
 
 Camera source reliability is binary geometric visibility from the detector's
-predicted center and transformed `lidar2img` matrices.  The temporal source is
-always available.  The router may select at most two sources (`top_k=2`).
+predicted center and transformed `lidar2img` matrices. The temporal source is
+always available. The router may select at most two sources (`top_k=2`).
 
 The source choice is therefore local, geometry-constrained and source-aware.
 It does not reconstruct the failed camera.
@@ -71,7 +71,7 @@ It does not reconstruct the failed camera.
 ## Frozen vulnerability control signal
 
 For each P1 seed, the corresponding frozen P0 seed checkpoint is loaded.
-Only clean-anchor P0 inputs are provided to it.  The active protocol's frozen
+Only clean-anchor P0 inputs are provided to it. The active protocol's frozen
 P0 boundary-crossing probability gates the magnitude of the P1 residual.
 No P1 label, future clean representation, fault outcome or GT information is
 used to compute this risk gate.
@@ -88,15 +88,15 @@ The main P1 intervention is deliberately narrow:
   query;
 - the Fault box-regression output is left unchanged.
 
-This isolates the already-established target-score-collapse mechanism.  P1 does
+This isolates the already-established target-score-collapse mechanism. P1 does
 not claim geometry repair.
 
-Clean inference is an explicit bypass.  Therefore the P1 code path must be
+Clean inference is an explicit bypass. Therefore the P1 code path must be
 bitwise identity on Clean when routing is disabled/no fault is active.
 
 ## Training protocol
 
-Only P1 router parameters are trainable.  StreamPETR and P0 parameters are
+Only P1 router parameters are trainable. StreamPETR and P0 parameters are
 frozen and excluded from the optimizer.
 
 Three fixed seeds are used: `42`, `2027`, `2028`.
@@ -106,7 +106,7 @@ Three fixed seeds are used: `42`, `2027`, `2028`.
 - `probe_test`: physically locked until all three P1 checkpoints are frozen.
 
 Training sampling is balanced over `(protocol, cross_topk label)` using counts
-computed from `probe_train` only.  Validation is evaluated at its natural class
+computed from `probe_train` only. Validation is evaluated at its natural class
 frequency.
 
 The frozen loss is:
@@ -131,18 +131,24 @@ Before formal train/val extraction, one frozen discovery scene must satisfy:
 4. the source bank has the frozen three-source layout;
 5. the failed `CAM_BACK` is absent;
 6. every row has the temporal backup source available;
-7. a newly initialized P1 router is exact identity because its residual scale is
+7. the frozen P0 seed-42 checkpoint accepts the exact single-object input
+   interface used by P1 and returns finite `[B,1,3]` vulnerability/crossing
+   outputs;
+8. saved clean/fault final-query tensors replay the frozen StreamPETR final
+   classifier with maximum target-score absolute error <= `5e-4`;
+9. a newly initialized P1 router is exact identity because its residual scale is
    zero;
-8. the explicit clean bypass is exact identity after arbitrary router weights.
+10. the explicit clean bypass is exact identity after arbitrary router weights.
 
-Failure locks formal P1 extraction.
+Failure locks formal P1 extraction. Formal train/val export is invoked through a
+wrapper that requires the completed smoke-gate JSON to contain `passed=true`.
 
 ## Formal test outcomes
 
 The formal 132-scene `probe_test` evaluation patches the full Fault
-classification tensor at each cohort object's frozen query.  The full routed
+classification tensor at each cohort object's frozen query. The full routed
 class vector is substituted, not only the GT class, so new class competition
-and FP inflation remain observable.  Fault boxes are unchanged.
+and FP inflation remain observable. Fault boxes are unchanged.
 
 For each protocol and seed we report:
 
@@ -155,7 +161,7 @@ For each protocol and seed we report:
 - risk probability and selected source IDs.
 
 All object-level uncertainty is bootstrapped 5000 times by both `scene_token`
-and `instance_token`.  FP inflation is bootstrapped 5000 times by scene.
+and `instance_token`. FP inflation is bootstrapped 5000 times by scene.
 
 ## Hard gate
 
@@ -173,9 +179,9 @@ A protocol/seed passes only when all conditions hold:
    `2.0%`;
 7. clean identity passes.
 
-A fault family passes only if all three frozen seeds pass.  P1 is
+A fault family passes only if all three frozen seeds pass. P1 is
 `GO_CARE3D_P1_SPARSE_EVIDENCE_ROUTER` only if at least two qualitatively
-different fault families pass.  Otherwise the decision is
+different fault families pass. Otherwise the decision is
 `NO_GO_CARE3D_P1_SPARSE_EVIDENCE_ROUTER` and downstream mechanism expansion is
 locked.
 
