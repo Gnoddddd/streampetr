@@ -24,19 +24,55 @@ from mmdet3d.models import build_model  # noqa: E402
 
 from analysis.care3d_counterfactual import freeze_module  # noqa: E402
 from analysis.care3d_p1 import SOURCE_NAMES, assert_source_contract  # noqa: E402
+from models.care3d import CARE3DCore  # noqa: E402
 from models.care3d_p1 import CARE3DP1ScoreRouter  # noqa: E402
 
 
 REPORT = ROOT / "reports/care3d/p1_sparse_evidence_router"
+P0 = ROOT / "reports/care3d/p0_counterfactual_vulnerability"
 P1_CONFIG = ROOT / "configs/care3d/p1_sparse_evidence_router.py"
 SCHEMA = 1
 CLASSIFIER_REPLAY_TOLERANCE = 5e-4
+PREDICTOR_KEYS = (
+    "object_features", "temporal_features", "decision_features",
+    "camera_support", "camera_quality",
+)
 
 
 def atomic_json(path: Path, value: object) -> None:
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(temporary, path)
+
+
+def p0_interface_replay(arrays: dict[str, np.ndarray]) -> bool:
+    checkpoint = P0 / "training/seed_42/best.pth"
+    if not checkpoint.exists():
+        raise RuntimeError("missing frozen P0 seed-42 checkpoint")
+    payload = torch.load(checkpoint, map_location="cpu")
+    model = CARE3DCore(**payload["model_config"])
+    model.load_state_dict(payload["model_state_dict"], strict=True)
+    if model.router is not None:
+        raise RuntimeError("frozen P0 seed 42 unexpectedly contains a router")
+    model = freeze_module(model.eval())
+    count = min(64, len(arrays["object_features"]))
+    with torch.no_grad():
+        output = model(
+            object_features=torch.as_tensor(arrays["object_features"][:count]).float().unsqueeze(1),
+            camera_support=torch.as_tensor(arrays["camera_support"][:count]).float().unsqueeze(1),
+            camera_quality=torch.as_tensor(arrays["camera_quality"][:count]).float().unsqueeze(1),
+            temporal_features=torch.as_tensor(arrays["temporal_features"][:count]).float().unsqueeze(1),
+            decision_features=torch.as_tensor(arrays["decision_features"][:count]).float().unsqueeze(1),
+        )
+    vulnerability = output["vulnerability"]
+    crossing = output["boundary_crossing_logits"]
+    expected = (count, 1, 3)
+    return bool(
+        tuple(vulnerability.shape) == expected
+        and tuple(crossing.shape) == expected
+        and torch.isfinite(vulnerability).all().item()
+        and torch.isfinite(crossing).all().item()
+    )
 
 
 def classifier_replay(
@@ -106,6 +142,7 @@ def main() -> None:
         raise RuntimeError(f"base P1 engineering smoke failed: {marker}")
 
     with np.load(feature_path) as packed:
+        arrays = {key: np.asarray(packed[key]).copy() for key in PREDICTOR_KEYS}
         source_features = np.asarray(packed["source_features"]).astype(np.float32)
         reliability = np.asarray(packed["source_reliability"]).astype(np.float32)
         clean_query = np.asarray(packed["clean_query"]).astype(np.float32)
@@ -117,6 +154,7 @@ def main() -> None:
     if len(fault_query) == 0:
         raise RuntimeError("engineering scene contains no P1 object rows")
 
+    p0_pass = p0_interface_replay(arrays)
     replay_pass, replay_difference = classifier_replay(
         clean_query, fault_query, clean_score, fault_score, target_class
     )
@@ -138,13 +176,8 @@ def main() -> None:
     ).eval()
     with torch.no_grad():
         routed, _ = router(
-            query,
-            sources,
-            source_reliability,
-            vulnerability,
-            boundary_logits,
-            protocol,
-            fault_active=True,
+            query, sources, source_reliability, vulnerability, boundary_logits,
+            protocol, fault_active=True,
         )
     zero_identity = bool(torch.equal(routed, query))
 
@@ -152,13 +185,8 @@ def main() -> None:
         for parameter in router.parameters():
             parameter.uniform_(-0.25, 0.25)
         bypass, _ = router(
-            query,
-            sources,
-            source_reliability,
-            vulnerability,
-            boundary_logits,
-            protocol,
-            fault_active=False,
+            query, sources, source_reliability, vulnerability, boundary_logits,
+            protocol, fault_active=False,
         )
     clean_bypass = bool(torch.equal(bypass, query))
     source_names_pass = tuple(marker.get("source_names", ())) == tuple(SOURCE_NAMES)
@@ -171,6 +199,7 @@ def main() -> None:
         "label_identity_pass": True,
         "source_contract_pass": True,
         "source_names_pass": bool(source_names_pass),
+        "p0_interface_replay_pass": p0_pass,
         "classifier_replay_pass": replay_pass,
         "classifier_replay_max_abs_diff": replay_difference,
         "classifier_replay_tolerance": CLASSIFIER_REPLAY_TOLERANCE,
@@ -178,17 +207,19 @@ def main() -> None:
         "trained_weight_clean_bypass_identity_pass": clean_bypass,
         "failed_cam_back_absent": "CAM_BACK" not in SOURCE_NAMES,
     }
-    result["passed"] = bool(all(result[key] for key in (
+    required = (
         "equivalence_pass",
         "predictor_input_identity_pass",
         "label_identity_pass",
         "source_contract_pass",
         "source_names_pass",
+        "p0_interface_replay_pass",
         "classifier_replay_pass",
         "zero_init_fault_identity_pass",
         "trained_weight_clean_bypass_identity_pass",
         "failed_cam_back_absent",
-    )))
+    )
+    result["passed"] = bool(all(result[key] for key in required))
     atomic_json(REPORT / "engineering_smoke_gate.json", result)
     progress_path = REPORT / "progress_manifest.json"
     progress = json.loads(progress_path.read_text())
