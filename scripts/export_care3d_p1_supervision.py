@@ -18,7 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 STREAM = ROOT / "repos/StreamPETR"
-sys.dont_writebytecode = True
+sys.dont_write_bytecode = True
 sys.path.insert(0, str(STREAM))
 
 import numpy as np  # noqa: E402
