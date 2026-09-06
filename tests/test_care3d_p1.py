@@ -1,15 +1,19 @@
 import numpy as np
+import pandas as pd
 import pytest
 import torch
 
 from analysis.care3d_p1 import (
+    QUERY_COLLISION_POLICY,
     SOURCE_CAMERA_INDICES,
     SOURCE_NAMES,
     assert_exact_sample_alignment,
     assert_source_contract,
     assert_unique_queries,
     build_source_bank,
+    filter_aligned_rows,
     p1_gate_flags,
+    query_collision_eligibility,
     sample_projected_camera_tokens,
 )
 from models.care3d_p1 import CARE3DP1ScoreRouter, p1_score_routing_loss
@@ -142,6 +146,41 @@ def test_p1_alignment_and_unique_query_guards():
     assert_unique_queries([1, 3, 9])
     with pytest.raises(RuntimeError):
         assert_unique_queries([1, 3, 1])
+
+
+def test_query_collision_eligibility_excludes_entire_collision_group():
+    audit = query_collision_eligibility(
+        [3, 3, 3, 4, 4, 5],
+        [7, 7, 9, 7, 8, 7],
+    )
+    assert audit["policy"] == QUERY_COLLISION_POLICY
+    assert audit["eligible"].tolist() == [False, False, True, True, True, True]
+    assert audit["multiplicity"].tolist() == [2, 2, 1, 1, 1, 1]
+    assert audit["p0_rows_total"] == 6
+    assert audit["p1_eligible_rows"] == 4
+    assert audit["query_collision_excluded_rows"] == 2
+    assert audit["query_collision_groups"] == 1
+
+
+def test_filter_aligned_rows_uses_metadata_only_and_preserves_order():
+    frame = pd.DataFrame({
+        "sample_id": ["a", "b", "c", "d"],
+        "target_frame_idx": [3, 3, 3, 4],
+        "target_clean_query_index": [11, 11, 12, 11],
+        "cross_topk_like_metadata_not_used": [1, 0, 1, 0],
+    })
+    arrays = {
+        "object_features": np.arange(4 * 2, dtype=np.float32).reshape(4, 2),
+        "labels": np.asarray([1, 0, 1, 0], dtype=np.int8),
+    }
+    filtered, packed, audit = filter_aligned_rows(frame, arrays)
+    assert filtered.sample_id.tolist() == ["c", "d"]
+    assert packed["labels"].tolist() == [1, 0]
+    assert packed["object_features"].tolist() == [[4.0, 5.0], [6.0, 7.0]]
+    assert int(packed["_p1_query_collision_excluded_rows"]) == 2
+    assert audit["query_collision_groups"] == 1
+    for _, group in filtered.groupby("target_frame_idx"):
+        assert len(group.target_clean_query_index) == len(set(group.target_clean_query_index))
 
 
 def test_p1_gate_requires_recovery_no_harm_fp_and_clean_identity():
