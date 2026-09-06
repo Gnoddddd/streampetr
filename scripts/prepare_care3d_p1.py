@@ -25,6 +25,8 @@ PROTOCOL_PATHS = {
 EXPECTED_SCENE_MANIFEST_SHA256 = "83637205c930611ccdc6879eb233f72a9b0a5997248f4b5b5edf3242182d6da1"
 SEEDS = (42, 2027, 2028)
 SCHEMA = 1
+QUERY_COLLISION_POLICY = "exclude_all_rows_in_shared_target_query_frame"
+AMENDMENT_HEADING = "## Implementation amendment: shared target-query collisions"
 
 
 def sha256(path: Path) -> str:
@@ -40,6 +42,35 @@ def atomic_json(path: Path, value: object) -> None:
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(temporary, path)
+
+
+def any_files(path: Path) -> bool:
+    return path.exists() and any(item.is_file() for item in path.rglob("*"))
+
+
+def amendment_is_explicitly_preregistered() -> bool:
+    text = PREREG.read_text(encoding="utf-8")
+    return AMENDMENT_HEADING in text and QUERY_COLLISION_POLICY in text
+
+
+def downstream_p1_training_or_test_started() -> dict:
+    training_files = any_files(REPORT / "training")
+    probe_test_files = any_files(REPORT / "evaluation/probe_test")
+    progress_path = REPORT / "progress_manifest.json"
+    probe_test_progress_opened = False
+    if progress_path.exists():
+        progress = json.loads(progress_path.read_text())
+        test_stage = progress.get("stages", {}).get("probe_test_evaluation")
+        probe_test_progress_opened = isinstance(test_stage, dict) or test_stage not in (
+            None,
+            "LOCKED_PENDING_TRAINING",
+        )
+    return {
+        "training_files_exist": bool(training_files),
+        "probe_test_files_exist": bool(probe_test_files),
+        "probe_test_progress_opened": bool(probe_test_progress_opened),
+        "started": bool(training_files or probe_test_files or probe_test_progress_opened),
+    }
 
 
 def main() -> None:
@@ -139,7 +170,32 @@ def main() -> None:
         )
         changed = [key for key in frozen_keys if previous.get(key) != source.get(key)]
         if changed:
-            raise RuntimeError(f"P1 frozen source identity changed: {changed}")
+            downstream = downstream_p1_training_or_test_started()
+            amendment_allowed = bool(
+                changed == ["p1_preregistration_sha256"]
+                and amendment_is_explicitly_preregistered()
+                and not downstream["started"]
+            )
+            if not amendment_allowed:
+                raise RuntimeError(
+                    "P1 frozen source identity changed outside the allowed pre-training "
+                    f"preregistration amendment: changed={changed}, downstream={downstream}"
+                )
+            source["p1_preregistration_amendment"] = {
+                "type": "shared_target_query_collision_eligibility",
+                "policy": QUERY_COLLISION_POLICY,
+                "declared_date": "2026-09-06",
+                "previous_sha256": previous.get("p1_preregistration_sha256"),
+                "current_sha256": source["p1_preregistration_sha256"],
+                "only_changed_frozen_key": "p1_preregistration_sha256",
+                "upstream_identity_unchanged": True,
+                "p1_router_training_started": False,
+                "probe_test_opened": False,
+            }
+        elif "p1_preregistration_amendment" in previous:
+            source["p1_preregistration_amendment"] = previous[
+                "p1_preregistration_amendment"
+            ]
     atomic_json(validation_path, source)
 
     manifest.to_csv(REPORT / "frozen_scene_manifest.csv", index=False)
