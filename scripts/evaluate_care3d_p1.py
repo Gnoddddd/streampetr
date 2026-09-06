@@ -37,30 +37,17 @@ from analysis.care3d_p1 import (  # noqa: E402
 )
 from models.care3d import CARE3DCore  # noqa: E402
 from models.care3d_p1 import CARE3DP1ScoreRouter  # noqa: E402
-from scripts.audit_dark_target_recoverability import (  # noqa: E402
-    features,
-    physical,
-    run_head,
-    snapshot,
-    unpack,
-)
+from scripts.audit_dark_target_recoverability import (
+    features, physical, run_head, snapshot, unpack,
+)  # noqa: E402
 from scripts.export_care3d_counterfactual_pairs import atomic_json  # noqa: E402
 from scripts.export_care3d_p1_supervision import main_p0_source  # noqa: E402
-from scripts.run_bd_temporal_support_p0 import (  # noqa: E402
-    CHECKPOINT,
-    CONFIG,
-    DATA,
-    frame_context,
-    protocol_dataset,
-)
-from scripts.run_prospective_failure_features import (  # noqa: E402
-    CLASSES,
-    POST_RANGE,
-    TAPS,
-    captured_head,
-    target_frame,
-)
-
+from scripts.run_bd_temporal_support_p0 import (
+    CHECKPOINT, CONFIG, DATA, frame_context, protocol_dataset,
+)  # noqa: E402
+from scripts.run_prospective_failure_features import (
+    CLASSES, POST_RANGE, TAPS, captured_head, target_frame,
+)  # noqa: E402
 
 REPORT = ROOT / "reports/care3d/p1_sparse_evidence_router"
 P0 = ROOT / "reports/care3d/p0_counterfactual_vulnerability"
@@ -73,11 +60,8 @@ SEEDS = (42, 2027, 2028)
 SCHEMA = 1
 STOP_REQUESTED = False
 PREDICTOR_KEYS = (
-    "object_features",
-    "temporal_features",
-    "decision_features",
-    "camera_support",
-    "camera_quality",
+    "object_features", "temporal_features", "decision_features",
+    "camera_support", "camera_quality",
 )
 
 
@@ -148,13 +132,17 @@ def build_p1(seed: int, device: torch.device):
 
 
 def p0_forward(model, predictor_inputs):
-    return model(
-        object_features=predictor_inputs["object_features"],
-        camera_support=predictor_inputs["camera_support"],
-        camera_quality=predictor_inputs["camera_quality"],
-        temporal_features=predictor_inputs["temporal_features"],
-        decision_features=predictor_inputs["decision_features"],
+    output = model(
+        object_features=predictor_inputs["object_features"].unsqueeze(1),
+        camera_support=predictor_inputs["camera_support"].unsqueeze(1),
+        camera_quality=predictor_inputs["camera_quality"].unsqueeze(1),
+        temporal_features=predictor_inputs["temporal_features"].unsqueeze(1),
+        decision_features=predictor_inputs["decision_features"].unsqueeze(1),
     )
+    return {
+        "vulnerability": output["vulnerability"][:, 0],
+        "boundary_crossing_logits": output["boundary_crossing_logits"][:, 0],
+    }
 
 
 def deployment_stats(logits, boxes, targets, context):
@@ -249,7 +237,7 @@ def main() -> None:
     if args.scene_token:
         rows = rows[rows.scene_token.astype(str) == str(args.scene_token)].reset_index(drop=True)
         if len(rows) != 1:
-            raise RuntimeError("scene-token is not in frozen probe-test")
+            raise RuntimeError("scene-token is not in frozen probe_test")
     if args.max_scenes is not None:
         rows = rows.iloc[: int(args.max_scenes)].reset_index(drop=True)
     out = REPORT / "evaluation/probe_test"
@@ -288,7 +276,8 @@ def main() -> None:
     }
     token_index = {str(info["token"]): index for index, info in enumerate(clean_dataset.data_infos)}
     for protocol, dataset in fault_datasets.items():
-        if token_index != {str(info["token"]): index for index, info in enumerate(dataset.data_infos)}:
+        other = {str(info["token"]): index for index, info in enumerate(dataset.data_infos)}
+        if token_index != other:
             raise RuntimeError(f"P1 test dataset mismatch: {protocol}")
 
     detector = build_model(cfg.model, test_cfg=cfg.get("test_cfg"))
@@ -361,11 +350,7 @@ def main() -> None:
                 with torch.no_grad():
                     _, fault_pyramid, fault_feats = features(detector, fault_image)
                     fault_output, _, fault_taps = captured_head(
-                        detector,
-                        fault_meta,
-                        fault_data,
-                        fault_feats.detach(),
-                        True,
+                        detector, fault_meta, fault_data, fault_feats.detach(), True,
                         branch_states[protocol_index],
                     )
                 p_index = protocol_index - 1
@@ -390,9 +375,8 @@ def main() -> None:
                         key: to_tensor(main_arrays[key][row_indices], device)
                         for key in PREDICTOR_KEYS
                     }
-                    target_class = main_frame.prediction_class.iloc[row_indices].map(
-                        {name: index for index, name in enumerate(CLASSES)}
-                    ).to_numpy(dtype=int)
+                    class_map = {name: index for index, name in enumerate(CLASSES)}
+                    target_class = main_frame.prediction_class.iloc[row_indices].map(class_map).to_numpy(dtype=int)
                 else:
                     fault_query = None
                     sources = reliability = None
@@ -410,13 +394,10 @@ def main() -> None:
                                 (len(row_indices),), p_index, device=device, dtype=torch.long
                             )
                             routed, aux = p1_models[seed](
-                                fault_query,
-                                sources,
-                                reliability,
+                                fault_query, sources, reliability,
                                 p0_output["vulnerability"],
                                 p0_output["boundary_crossing_logits"],
-                                protocol_tensor,
-                                fault_active=True,
+                                protocol_tensor, fault_active=True,
                             )
                             routed_logits = classifier(routed).detach().float().cpu().numpy()
                             risks = aux["risk_probability"].detach().float().cpu().numpy()
@@ -433,17 +414,13 @@ def main() -> None:
                             patched_logits[int(query), :] = routed_logits[local]
                     patched = deployment_stats(patched_logits, boxes, targets, context)
                     frame_rows.append({
-                        "seed": seed,
-                        "protocol": protocol,
-                        "scene_token": scene,
+                        "seed": seed, "protocol": protocol, "scene_token": scene,
                         "target_frame_idx": target_frame_idx,
                         "target_sample_token": tokens[target_frame_idx],
                         "base_predictions": base["prediction_count"],
                         "patched_predictions": patched["prediction_count"],
-                        "base_tp": base["tp"],
-                        "patched_tp": patched["tp"],
-                        "base_fp": base["fp"],
-                        "patched_fp": patched["fp"],
+                        "base_tp": base["tp"], "patched_tp": patched["tp"],
+                        "base_fp": base["fp"], "patched_fp": patched["fp"],
                     })
                     for local, row_index in enumerate(row_indices):
                         row = main_frame.iloc[int(row_index)]
@@ -456,18 +433,14 @@ def main() -> None:
                         patched_tp = int(gt_token in patched["matches"])
                         base_cross = int(main_arrays["cross_topk"][row_index, p_index])
                         object_rows.append({
-                            "seed": seed,
-                            "protocol": protocol,
-                            "scene_token": scene,
+                            "seed": seed, "protocol": protocol, "scene_token": scene,
                             "instance_token": str(row.instance_token),
                             "sample_id": str(row.sample_id),
                             "target_frame_idx": target_frame_idx,
                             "target_sample_token": tokens[target_frame_idx],
-                            "target_gt_token": gt_token,
-                            "query_index": query,
+                            "target_gt_token": gt_token, "query_index": query,
                             "prediction_class": str(row.prediction_class),
-                            "base_tp": base_tp,
-                            "patched_tp": patched_tp,
+                            "base_tp": base_tp, "patched_tp": patched_tp,
                             "lost_recovered": int((not base_tp) and patched_tp),
                             "retained_damaged": int(base_tp and (not patched_tp)),
                             "tp_delta": patched_tp - base_tp,
@@ -497,12 +470,8 @@ def main() -> None:
                 dummy_protocol = torch.zeros((1,), dtype=torch.long, device=device)
                 with torch.no_grad():
                     bypass, _ = p1_models[seed](
-                        clean_query,
-                        dummy_sources,
-                        dummy_reliability,
-                        dummy_vulnerability,
-                        dummy_logits,
-                        dummy_protocol,
+                        clean_query, dummy_sources, dummy_reliability,
+                        dummy_vulnerability, dummy_logits, dummy_protocol,
                         fault_active=False,
                     )
                 clean_identity_pass &= bool(torch.equal(bypass, clean_query))
