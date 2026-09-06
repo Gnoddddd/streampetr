@@ -120,7 +120,8 @@ def load_split(split: str) -> dict[str, np.ndarray]:
     collected = {key: [] for key in keys}
     for scene in scenes:
         prefix = REPORT / "incremental/supervision" / scene
-        marker_path, feature_path = prefix.with_suffix(".complete.json"), prefix.with_suffix(".features.npz")
+        marker_path = prefix.with_suffix(".complete.json")
+        feature_path = prefix.with_suffix(".features.npz")
         if not marker_path.exists() or not feature_path.exists():
             raise RuntimeError(f"missing P1 supervision: {scene}")
         marker = json.loads(marker_path.read_text())
@@ -224,13 +225,17 @@ def to_device(batch, device):
 
 
 def p0_forward(p0, batch):
-    return p0(
-        object_features=batch["object_features"],
-        camera_support=batch["camera_support"],
-        camera_quality=batch["camera_quality"],
-        temporal_features=batch["temporal_features"],
-        decision_features=batch["decision_features"],
+    output = p0(
+        object_features=batch["object_features"].unsqueeze(1),
+        camera_support=batch["camera_support"].unsqueeze(1),
+        camera_quality=batch["camera_quality"].unsqueeze(1),
+        temporal_features=batch["temporal_features"].unsqueeze(1),
+        decision_features=batch["decision_features"].unsqueeze(1),
     )
+    return {
+        "vulnerability": output["vulnerability"][:, 0],
+        "boundary_crossing_logits": output["boundary_crossing_logits"][:, 0],
+    }
 
 
 def batch_loss(batch, p0, p1, classifier, loss_cfg):
@@ -301,7 +306,9 @@ def main() -> None:
         raise RuntimeError("CUDA requested but unavailable")
     validation, _ = require_ready()
     config = runpy.run_path(str(P1_CONFIG))
-    training_cfg, loss_cfg, router_cfg = dict(config["training"]), dict(config["loss"]), dict(config["router"])
+    training_cfg = dict(config["training"])
+    loss_cfg = dict(config["loss"])
+    router_cfg = dict(config["router"])
     seed = int(args.seed)
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -311,16 +318,26 @@ def main() -> None:
     torch.backends.cudnn.benchmark = False
     device = torch.device(args.device)
 
-    train, val = flatten_protocols(load_split("probe_train")), flatten_protocols(load_split("probe_val"))
+    train = flatten_protocols(load_split("probe_train"))
+    val = flatten_protocols(load_split("probe_val"))
     weights, balance_counts = balanced_weights(train)
     train_dataset, val_dataset = P1Dataset(train), P1Dataset(val)
     generator = torch.Generator().manual_seed(seed)
-    sampler = WeightedRandomSampler(torch.as_tensor(weights, dtype=torch.double), len(train_dataset), True, generator=generator)
+    sampler = WeightedRandomSampler(
+        torch.as_tensor(weights, dtype=torch.double),
+        len(train_dataset),
+        True,
+        generator=generator,
+    )
     batch_size = int(args.batch_size or training_cfg["batch_size"])
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=sampler,
-                              num_workers=int(training_cfg["num_workers"]), pin_memory=True)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False,
-                            num_workers=int(training_cfg["num_workers"]), pin_memory=True)
+    train_loader = DataLoader(
+        train_dataset, batch_size=batch_size, sampler=sampler,
+        num_workers=int(training_cfg["num_workers"]), pin_memory=True
+    )
+    val_loader = DataLoader(
+        val_dataset, batch_size=batch_size, shuffle=False,
+        num_workers=int(training_cfg["num_workers"]), pin_memory=True
+    )
 
     p0 = build_p0(seed, device, validation)
     classifier = build_classifier(device, config)
@@ -329,8 +346,10 @@ def main() -> None:
         vulnerability_dim=int(router_cfg["vulnerability_dim"]), hidden_dim=int(router_cfg["hidden_dim"]),
         top_k=int(router_cfg["top_k"]),
     ).to(device)
-    optimizer = torch.optim.AdamW(p1.parameters(), lr=float(training_cfg["learning_rate"]),
-                                  weight_decay=float(training_cfg["weight_decay"]))
+    optimizer = torch.optim.AdamW(
+        p1.parameters(), lr=float(training_cfg["learning_rate"]),
+        weight_decay=float(training_cfg["weight_decay"])
+    )
     p1_parameter_ids = {id(p) for p in p1.parameters() if p.requires_grad}
     optimizer_ids = {id(p) for group in optimizer.param_groups for p in group["params"]}
     if p1_parameter_ids != optimizer_ids:
@@ -339,7 +358,8 @@ def main() -> None:
         raise RuntimeError("frozen P0/detector unexpectedly trainable")
 
     epochs = int(args.epochs or training_cfg["epochs"])
-    patience, clip = int(training_cfg["patience"]), float(training_cfg["gradient_clip_norm"])
+    patience = int(training_cfg["patience"])
+    clip = float(training_cfg["gradient_clip_norm"])
     history, best_loss, best_epoch, stale = [], float("inf"), -1, 0
     directory = REPORT / "training" / f"seed_{seed}"
     directory.mkdir(parents=True, exist_ok=True)
@@ -358,20 +378,28 @@ def main() -> None:
             train_sum += float(losses["total"].item()) * count
             train_rows += count
         validation_metrics = evaluate(val_loader, p0, p1, classifier, loss_cfg, device)
-        row = {"epoch": epoch, "train_total": train_sum / max(train_rows, 1),
-               **{f"val_{key}": value for key, value in validation_metrics.items()}}
+        row = {
+            "epoch": epoch,
+            "train_total": train_sum / max(train_rows, 1),
+            **{f"val_{key}": value for key, value in validation_metrics.items()},
+        }
         history.append(row)
         print(json.dumps(row, sort_keys=True), flush=True)
         current = validation_metrics["total"]
         if current < best_loss - 1e-8:
             best_loss, best_epoch, stale = current, epoch, 0
             torch.save({
-                "schema_version": SCHEMA, "seed": seed, "model_state_dict": p1.state_dict(),
-                "router_config": {key: int(router_cfg[key]) for key in
-                                  ("object_dim", "source_dim", "vulnerability_dim", "hidden_dim", "top_k")},
+                "schema_version": SCHEMA,
+                "seed": seed,
+                "model_state_dict": p1.state_dict(),
+                "router_config": {
+                    key: int(router_cfg[key]) for key in
+                    ("object_dim", "source_dim", "vulnerability_dim", "hidden_dim", "top_k")
+                },
                 "source_names": tuple(SOURCE_NAMES),
                 "p0_checkpoint_sha256": validation["p0_checkpoint_sha256"][str(seed)],
-                "best_epoch": best_epoch, "best_val_loss": best_loss,
+                "best_epoch": best_epoch,
+                "best_val_loss": best_loss,
             }, best_path)
         else:
             stale += 1
@@ -381,16 +409,25 @@ def main() -> None:
         raise RuntimeError("P1 training did not produce a checkpoint")
     write_history(directory / "history.csv", history)
     manifest = {
-        "schema_version": SCHEMA, "status": "P1_TRAINING_COMPLETE_TEST_UNSEEN", "seed": seed,
-        "best_epoch": best_epoch, "best_val_loss": best_loss,
-        "train_rows_flattened": len(train_dataset), "val_rows_flattened": len(val_dataset),
-        "probe_test_read": False, "probe_test_exported_before_training": False,
-        "detector_parameters_in_optimizer": 0, "p0_parameters_in_optimizer": 0,
+        "schema_version": SCHEMA,
+        "status": "P1_TRAINING_COMPLETE_TEST_UNSEEN",
+        "seed": seed,
+        "best_epoch": best_epoch,
+        "best_val_loss": best_loss,
+        "train_rows_flattened": len(train_dataset),
+        "val_rows_flattened": len(val_dataset),
+        "probe_test_read": False,
+        "probe_test_exported_before_training": False,
+        "detector_parameters_in_optimizer": 0,
+        "p0_parameters_in_optimizer": 0,
         "router_parameters_in_optimizer": sum(p.numel() for p in p1.parameters()),
-        "source_names": list(SOURCE_NAMES), "top_k": int(router_cfg["top_k"]),
-        "classification_only": True, "regression_unchanged": True,
+        "source_names": list(SOURCE_NAMES),
+        "top_k": int(router_cfg["top_k"]),
+        "classification_only": True,
+        "regression_unchanged": True,
         "balanced_sampling_source": "probe_train_protocol_x_cross_topk_only",
-        "balanced_sampling_counts": balance_counts, "checkpoint_sha256": sha256(best_path),
+        "balanced_sampling_counts": balance_counts,
+        "checkpoint_sha256": sha256(best_path),
     }
     atomic_json(directory / "training_manifest.json", manifest)
     update_progress()
