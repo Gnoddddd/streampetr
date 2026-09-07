@@ -12,17 +12,20 @@ The engineering smoke scene had passed because its worst-case float16 round-trip
 
 ## Frozen repair
 
-The replay tolerance is **not relaxed**. Instead, formal P1 router-supervision caches are regenerated with FP32 storage under policy id:
+The replay tolerance is **not relaxed**. Instead, formal P1 router-supervision caches are regenerated under policy id:
 
 `fp32_router_supervision_v1`
 
-The compatibility wrapper `scripts/export_care3d_p1_supervision_fp32.py` changes only exporter cache precision. It leaves the following frozen components unchanged:
+Only `clean_query` and `fault_query` are preserved as FP32 so the frozen classifier is replayed from the same numerical state that produced the reference score. The large backup-source feature and reliability caches remain at their original float16 storage precision. This minimizes the repair to the tensors implicated by the replay invariant.
+
+The compatibility wrapper `scripts/export_care3d_p1_supervision_fp32.py` leaves the following frozen components unchanged:
 
 - official StreamPETR checkpoint and detector parameters;
 - frozen P0 predictors and P0 inputs;
 - 419 / 133 / 132 scene split;
 - shared-query collision policy;
 - source bank and top-k routing rule;
+- source-feature cache precision;
 - labels, loss weights, optimizer settings and seeds;
 - `5e-4` classifier replay tolerance;
 - all P1 Go / No-Go thresholds;
@@ -32,6 +35,6 @@ Old supervision markers are stale for this wrapper unless they carry `storage_pr
 
 ## Restart rule
 
-The incomplete seed-42 attempt must not be resumed. Any partial P1 training artifacts from the float16-cache attempt are archived or removed, and all three seeds `42 / 2027 / 2028` restart from initialization only after the FP32 engineering smoke and 552-scene supervision export pass.
+The incomplete seed-42 attempt must not be resumed. Any partial P1 training artifacts from the float16-query-cache attempt are archived or removed, and all three seeds `42 / 2027 / 2028` restart from initialization only after the FP32 engineering smoke and 552-scene supervision export pass.
 
 No probe-test result was inspected in defining this repair.
