@@ -39,7 +39,10 @@ class _NumpyFP32Proxy:
     float16 = _np.float32
 
     def zeros(self, shape, dtype=float, *args, **kwargs):
-        dims = tuple(int(value) for value in shape)
+        if _np.isscalar(shape):
+            dims = (int(shape),)
+        else:
+            dims = tuple(int(value) for value in shape)
         effective_dtype = dtype
         if dtype is self.float16:
             is_source_features = len(dims) == 4 and dims[-2:] == (3, 256)
