@@ -38,10 +38,29 @@ def test_scene_shard_max_scenes_is_local_to_each_worker():
     assert shard.scene.tolist() == ["s1", "s4"]
 
 
-def test_shared_protocol_dataset_reuses_infos_and_rebuilds_only_pipeline():
+def test_shared_protocol_dataset_reuses_infos_and_clones_registered_pipeline():
+    class LoadSomething:
+        pass
+
+    class ApplyPartialObservation:
+        def __init__(self, schedule_file=None, training=False, seed=7):
+            self.schedule_file = schedule_file
+            self.training = bool(training)
+            self.seed = int(seed)
+            self.schedule = object() if schedule_file else None
+
+    class DummyCompose:
+        def __init__(self, transforms):
+            self.transforms = list(transforms)
+
+    clean_transform = ApplyPartialObservation(
+        schedule_file=None,
+        training=False,
+        seed=7,
+    )
     base = SimpleNamespace(
         data_infos=[{"token": "a"}, {"token": "b"}],
-        pipeline=[{"type": "base"}],
+        pipeline=DummyCompose([LoadSomething(), clean_transform]),
         test_mode=True,
     )
     config = SimpleNamespace(
@@ -49,31 +68,38 @@ def test_shared_protocol_dataset_reuses_infos_and_rebuilds_only_pipeline():
             test=SimpleNamespace(
                 pipeline=[
                     {"type": "LoadSomething"},
-                    {"type": "ApplyPartialObservation", "schedule_file": None},
+                    {
+                        "type": "ApplyPartialObservation",
+                        "schedule_file": None,
+                        "training": False,
+                        "seed": 7,
+                    },
                 ],
                 test_mode=True,
             )
         )
     )
 
-    built = []
-
-    def compose_factory(pipeline):
-        built.append(pipeline)
-        return pipeline
-
     shared = build_shared_protocol_dataset(
         base,
         config,
         "/tmp/frozen_protocol.json",
-        compose_factory=compose_factory,
     )
 
     assert shared is not base
     assert shared.data_infos is base.data_infos
-    assert shared.pipeline is built[0]
-    assert shared.pipeline[1]["schedule_file"] == "/tmp/frozen_protocol.json"
-    assert base.pipeline == [{"type": "base"}]
+    assert shared.pipeline is not base.pipeline
+    assert shared.pipeline.transforms is not base.pipeline.transforms
+    assert shared.pipeline.transforms[0] is not base.pipeline.transforms[0]
+    assert shared.pipeline.transforms[1] is not clean_transform
+    assert (
+        shared.pipeline.transforms[1].__class__
+        is clean_transform.__class__
+    )
+    assert shared.pipeline.transforms[1].schedule_file == "/tmp/frozen_protocol.json"
+    assert shared.pipeline.transforms[1].schedule is not None
+    assert base.pipeline.transforms[1].schedule_file is None
+    assert base.pipeline.transforms[1].schedule is None
     assert config.data.test.pipeline[1]["schedule_file"] is None
     assert shared.test_mode is True
 
