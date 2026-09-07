@@ -25,6 +25,18 @@ def test_fp32_proxy_promotes_queries_but_preserves_source_cache_precision():
     assert proxy.asarray([1, 2, 3]).dtype == np.int64
 
 
+def test_fp32_proxy_accepts_scalar_zero_shapes_without_changing_non_fp_dtypes():
+    proxy = _NumpyFP32Proxy()
+
+    filled = proxy.zeros(5, dtype=bool)
+    scores = proxy.zeros(np.int64(7), dtype=np.float32)
+
+    assert filled.shape == (5,)
+    assert filled.dtype == np.bool_
+    assert scores.shape == (7,)
+    assert scores.dtype == np.float32
+
+
 def test_fp32_marker_policy_invalidates_old_supervision(tmp_path):
     path = tmp_path / "scene.complete.json"
     validation = {"scene_manifest_sha256": "manifest"}
