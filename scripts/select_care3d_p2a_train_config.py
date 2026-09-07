@@ -55,6 +55,7 @@ def main() -> None:
     directory = REPORT / "incremental/probe_train"
     summaries = []
     observed = set()
+    zero_object_scenes = []
     for scene in sorted(train_scenes):
         marker_path = directory / f"{scene}.complete.json"
         summary_path = directory / f"{scene}.train_summary.csv"
@@ -73,7 +74,16 @@ def main() -> None:
             raise RuntimeError(f"invalid P2-A probe-train marker: {scene}")
         frame = pd.read_csv(summary_path)
         expected_rows = len(association_grid()) * 3
-        if len(frame) != expected_rows:
+        eligible_rows = int(marker.get("eligible_rows", -1))
+        if eligible_rows < 0:
+            raise RuntimeError(f"P2-A train marker lacks eligible_rows: {scene}")
+        if eligible_rows == 0:
+            if len(frame) != 0:
+                raise RuntimeError(
+                    f"zero-object P2-A train scene unexpectedly has summary rows: {scene}"
+                )
+            zero_object_scenes.append(scene)
+        elif len(frame) != expected_rows:
             raise RuntimeError(
                 f"P2-A train summary row count changed for {scene}: {len(frame)}"
             )
@@ -82,13 +92,17 @@ def main() -> None:
     if observed != train_scenes:
         raise RuntimeError("P2-A probe-train coverage is incomplete")
 
-    merged = pd.concat(summaries, ignore_index=True)
+    nonempty = [frame for frame in summaries if len(frame)]
+    if not nonempty:
+        raise RuntimeError("P2-A probe-train contains no eligible association rows")
+    merged = pd.concat(nonempty, ignore_index=True)
     result = select_global_config(merged)
     selection = {
         "schema_version": SCHEMA,
         "status": "P2A_GLOBAL_ASSOCIATION_CONFIG_FROZEN",
         "fit_split": "probe_train",
         "fit_scenes": 419,
+        "zero_object_scenes": zero_object_scenes,
         "protocols": ["blur_back", "crash_back", "dark_back"],
         "global_not_protocol_specific": True,
         "grid_size": 15,
