@@ -30,6 +30,7 @@ from pathlib import Path
 R = Path("reports/care3d/p2a_online_query_association")
 progress = json.loads((R / "progress_manifest.json").read_text())
 validation = json.loads((R / "source_validation.json").read_text())
+equivalence_path = R / "engineering_smoke/shared_dataset_equivalence.json"
 if progress.get("status") not in {
     "P2A_ENGINEERING_SMOKE_PASSED",
     "P2A_TRAIN_EXTRACTION_RUNNING",
@@ -39,8 +40,25 @@ if progress.get("probe_test_read") is not False:
     raise RuntimeError("P2-A progress indicates probe-test access")
 if validation.get("probe_test_read") is not False:
     raise RuntimeError("P2-A source validation indicates probe-test access")
+if not equivalence_path.exists():
+    raise RuntimeError(
+        "run scripts/check_care3d_p2a_shared_dataset_equivalence.py before v2 train extraction"
+    )
+equivalence = json.loads(equivalence_path.read_text())
+if equivalence.get("status") != "P2A_SHARED_DATASET_EQUIVALENCE_PASSED":
+    raise RuntimeError("P2-A shared-dataset equivalence did not pass")
+if equivalence.get("all_model_inputs_exact") is not True:
+    raise RuntimeError("P2-A shared-dataset model inputs are not exact")
+if equivalence.get("probe_test_read") is not False:
+    raise RuntimeError("P2-A shared-dataset validation indicates probe-test access")
 print("PASS: P2-A probe-train extraction is eligible and probe-test is locked")
+print("PASS: shared-info dataset execution equivalence is frozen")
 PY
+
+echo "===== host memory before worker launch ====="
+free -h || true
+echo "===== swap ====="
+swapon --show || true
 
 pids=()
 for ((i=0; i<WORKERS; i++)); do
