@@ -34,6 +34,8 @@ if not marker.get("complete"):
     raise RuntimeError("P2-A engineering marker is incomplete")
 if not all(bool(marker.get(key)) for key in required):
     raise RuntimeError(f"P2-A engineering invariant failed: {marker}")
+if int(marker.get("eligible_rows", 0)) <= 0 or int(marker.get("method_rows", 0)) <= 0:
+    raise RuntimeError("P2-A smoke did not exercise a real association row")
 if marker.get("probe_test_read") is not False:
     raise RuntimeError("P2-A engineering smoke read probe-test")
 if validation.get("probe_test_read") is not False:
@@ -50,6 +52,7 @@ print(json.dumps({
     "status": "P2A_ENGINEERING_SMOKE_PASSED",
     "scene_token": scene,
     "eligible_rows": marker.get("eligible_rows"),
+    "method_rows": marker.get("method_rows"),
     "p2a_collision_excluded_rows": marker.get("p2a_collision_excluded_rows"),
     "query_layout_pass": marker.get("query_layout_pass"),
     "branch_state_pass": marker.get("branch_state_pass"),
