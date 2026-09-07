@@ -92,7 +92,18 @@ def build_shared_protocol_dataset(
         raise RuntimeError("shared protocol dataset unexpectedly aliases base object")
     if shared.data_infos is not clean_dataset.data_infos:
         raise RuntimeError("shared protocol dataset duplicated data_infos")
-    if len(shared) != len(clean_dataset):
+
+    # Real mmdet3d datasets implement ``__len__``.  The lightweight unit-test
+    # fixture intentionally does not, so fall back to the shared immutable
+    # ``data_infos`` length rather than making this execution helper depend on
+    # a framework-specific protocol that is irrelevant to the sharing contract.
+    try:
+        clean_length = len(clean_dataset)
+        shared_length = len(shared)
+    except TypeError:
+        clean_length = len(clean_dataset.data_infos)
+        shared_length = len(shared.data_infos)
+    if shared_length != clean_length:
         raise RuntimeError("shared protocol dataset length changed")
     return shared
 
