@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import numpy as np
 import pandas as pd
 import torch
@@ -9,6 +11,7 @@ from analysis.care3d_p2a_association import (
 )
 from analysis.care3d_p2a_execution import (
     assert_shards_partition,
+    build_shared_protocol_dataset,
     cheap_train_oracle_diagnostics,
     shard_scene_frame,
 )
@@ -33,6 +36,46 @@ def test_scene_shard_max_scenes_is_local_to_each_worker():
         frame, num_shards=3, shard_index=1, max_scenes=2
     )
     assert shard.scene.tolist() == ["s1", "s4"]
+
+
+def test_shared_protocol_dataset_reuses_infos_and_rebuilds_only_pipeline():
+    base = SimpleNamespace(
+        data_infos=[{"token": "a"}, {"token": "b"}],
+        pipeline=[{"type": "base"}],
+        test_mode=True,
+    )
+    config = SimpleNamespace(
+        data=SimpleNamespace(
+            test=SimpleNamespace(
+                pipeline=[
+                    {"type": "LoadSomething"},
+                    {"type": "ApplyPartialObservation", "schedule_file": None},
+                ],
+                test_mode=True,
+            )
+        )
+    )
+
+    built = []
+
+    def compose_factory(pipeline):
+        built.append(pipeline)
+        return pipeline
+
+    shared = build_shared_protocol_dataset(
+        base,
+        config,
+        "/tmp/frozen_protocol.json",
+        compose_factory=compose_factory,
+    )
+
+    assert shared is not base
+    assert shared.data_infos is base.data_infos
+    assert shared.pipeline is built[0]
+    assert shared.pipeline[1]["schedule_file"] == "/tmp/frozen_protocol.json"
+    assert base.pipeline == [{"type": "base"}]
+    assert config.data.test.pipeline[1]["schedule_file"] is None
+    assert shared.test_mode is True
 
 
 def test_fast_train_diagnostics_preserve_selection_relevant_outcomes():
