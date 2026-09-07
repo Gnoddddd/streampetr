@@ -2,15 +2,18 @@
 """Diagnose CARE-3D P1 classifier replay drift without opening probe-test.
 
 This script reads only the frozen P1 probe_train/probe_val supervision cache. It
-compares two replay paths against the authoritative exported target score:
+compares three replay paths against the authoritative exported target score:
 
-1. a 512-row standalone classifier batch, matching P1 trainer usage;
-2. a [1, 900, 256] shape-matched replay that restores the StreamPETR classifier
-   invocation shape and original query indices used inside the detector head.
+1. a 512-row standalone classifier batch, matching the original P1 trainer;
+2. a packed [1, 900, 256] classifier batch containing up to 512 cached queries,
+   which preserves the deployed StreamPETR classifier GEMM shape while remaining
+   practical for training;
+3. a [1, 900, 256] shape-matched replay that restores each query's original
+   detector query index inside its scene/frame/protocol group.
 
 The goal is to distinguish cache-precision problems from execution-shape / math
-path drift. It does not train, recalibrate, modify checkpoints, or read
-probe_test.
+path drift and to validate a deployment-shape training replacement. It does not
+train, recalibrate, modify checkpoints, or read probe_test.
 """
 
 from __future__ import annotations
@@ -62,16 +65,34 @@ def replay_batch(
     references: list[float],
     metadata: list[dict],
     device: torch.device,
-    record: dict,
+    standalone_record: dict,
+    packed_record: dict,
 ) -> None:
     if not queries:
         return
     query = torch.as_tensor(np.stack(queries), device=device, dtype=torch.float32)
     target_class = torch.as_tensor(classes, device=device, dtype=torch.long)
     reference = torch.as_tensor(references, device=device, dtype=torch.float32)
+    count = int(query.shape[0])
+    if count > QUERY_COUNT:
+        raise RuntimeError("diagnostic batch exceeds deployed query count")
+
     with torch.no_grad():
-        replay = target_scores(classifier(query), target_class)
-    update_max(record, (replay - reference).abs(), metadata)
+        standalone = target_scores(classifier(query), target_class)
+
+        # Keep the exact deployed classifier invocation shape. The classifier is
+        # pointwise across query rows; packing independent rows into the first
+        # slots therefore preserves one [1,900,256] GEMM path without mixing
+        # object information across rows.
+        padded = torch.zeros(
+            (1, QUERY_COUNT, QUERY_DIM), device=device, dtype=torch.float32
+        )
+        padded[0, :count] = query
+        packed_logits = classifier(padded)[0, :count]
+        packed = target_scores(packed_logits, target_class)
+
+    update_max(standalone_record, (standalone - reference).abs(), metadata)
+    update_max(packed_record, (packed - reference).abs(), metadata)
 
 
 def main() -> None:
@@ -100,6 +121,7 @@ def main() -> None:
         raise RuntimeError("expected exactly 552 frozen train/val scenes")
 
     batch_record = {"max_abs_diff": 0.0, "example": None}
+    packed_record = {"max_abs_diff": 0.0, "example": None}
     shape_record = {"max_abs_diff": 0.0, "example": None}
     dtype_counts = Counter()
     protocol_rows = Counter()
@@ -123,6 +145,7 @@ def main() -> None:
                 batch_metadata[:count],
                 device,
                 batch_record,
+                packed_record,
             )
             batch_queries = batch_queries[count:]
             batch_classes = batch_classes[count:]
@@ -192,7 +215,7 @@ def main() -> None:
                     for row in selected
                 ]
 
-                # Match the original detector classifier call shape and positions.
+                # Restore original detector classifier shape and positions.
                 padded = torch.zeros(
                     (1, QUERY_COUNT, QUERY_DIM), device=device, dtype=torch.float32
                 )
@@ -217,7 +240,7 @@ def main() -> None:
     flush(force=True)
 
     result = {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "P1_CLASSIFIER_REPLAY_DIAGNOSIS_COMPLETE",
         "probe_test_read": False,
         "scenes_checked": scenes_checked,
@@ -229,6 +252,7 @@ def main() -> None:
         "cuda_matmul_allow_tf32": bool(torch.backends.cuda.matmul.allow_tf32),
         "trainer_style_batch_size": TRAIN_BATCH,
         "trainer_style_replay": batch_record,
+        "packed_900_replay": packed_record,
         "shape_matched_900_replay": shape_record,
         "frozen_replay_tolerance": 5e-4,
     }
