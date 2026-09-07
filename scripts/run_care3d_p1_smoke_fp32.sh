@@ -14,6 +14,7 @@ pytest \
   tests/test_care3d_p0_pipeline.py \
   tests/test_care3d_cross_severity.py \
   tests/test_care3d_p1.py \
+  tests/test_care3d_p1_fp32_export.py \
   -v
 
 python scripts/export_care3d_p1_supervision_fp32.py \
