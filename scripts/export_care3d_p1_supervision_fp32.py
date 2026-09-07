@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Run the frozen CARE-3D P1 supervision exporter with FP32 storage.
+"""Run the frozen CARE-3D P1 supervision exporter with FP32 query storage.
 
-The original exporter intentionally used float16 for large cached tensors.  P1
+The original exporter intentionally used float16 for large cached tensors. P1
 training replays the frozen StreamPETR classifier from the cached final decoder
 query, so float16 round-trip quantization can exceed the frozen 5e-4 replay
-check on rare rows.  This wrapper changes only cache storage precision for
-arrays that the exporter would otherwise create as float16.  Detector/P0
-weights, labels, splits, source bank, losses and all decision gates are
-unchanged.
+check on rare rows. This wrapper promotes only ``clean_query`` and
+``fault_query`` storage to float32 while preserving the original float16 source
+feature/reliability cache. Detector/P0 weights, labels, splits, source bank,
+losses and all decision gates are unchanged.
 
-Old scene markers are treated as stale unless they carry STORAGE_POLICY.  This
+Old scene markers are treated as stale unless they carry STORAGE_POLICY. This
 forces engineering smoke and formal train/val supervision to be regenerated
 before P1 training restarts.
 """
@@ -17,7 +17,6 @@ before P1 training restarts.
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
 import numpy as _np
@@ -29,9 +28,25 @@ STORAGE_POLICY = "fp32_router_supervision_v1"
 
 
 class _NumpyFP32Proxy:
-    """Delegate NumPy except that exporter requests for float16 become float32."""
+    """Promote exporter query buffers to FP32 without changing source caches.
+
+    The exporter references ``np.float16`` both when allocating buffers and in
+    ``astype`` calls. Exposing float32 here prevents query quantization. The two
+    large source-cache shapes are explicitly allocated as real float16 so their
+    persisted precision remains identical to the original exporter.
+    """
 
     float16 = _np.float32
+
+    def zeros(self, shape, dtype=float, *args, **kwargs):
+        dims = tuple(int(value) for value in shape)
+        effective_dtype = dtype
+        if dtype is self.float16:
+            is_source_features = len(dims) == 4 and dims[-2:] == (3, 256)
+            is_source_reliability = len(dims) == 3 and dims[-1] == 3
+            if is_source_features or is_source_reliability:
+                effective_dtype = _np.float16
+        return _np.zeros(shape, dtype=effective_dtype, *args, **kwargs)
 
     def __getattr__(self, name):
         return getattr(_np, name)
