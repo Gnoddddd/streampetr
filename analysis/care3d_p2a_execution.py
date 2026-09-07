@@ -2,12 +2,14 @@
 
 These helpers do not change the frozen association cost, matching rule, cohort,
 labels, train-only selection, validation gate, or any P0/P1 artifact.  They only
-support deterministic scene sharding and omit train-only oracle diagnostics
-that are not consumed by configuration selection.
+support deterministic scene sharding, share immutable dataset metadata across
+fault protocol views, and omit train-only oracle diagnostics that are not
+consumed by configuration selection.
 """
 
 from __future__ import annotations
 
+import copy
 from typing import Dict, Sequence
 
 import numpy as np
@@ -16,7 +18,7 @@ import torch
 from torch import Tensor
 
 
-EXECUTION_POLICY = "p2a_train_parallel_shards_fast_diagnostics_v1"
+EXECUTION_POLICY = "p2a_train_parallel_shared_infos_fast_diagnostics_v2"
 
 
 def shard_scene_frame(
@@ -40,6 +42,59 @@ def shard_scene_frame(
     if max_scenes is not None:
         output = output.iloc[: int(max_scenes)].reset_index(drop=True)
     return output
+
+
+def build_shared_protocol_dataset(
+    clean_dataset,
+    config,
+    schedule,
+    *,
+    compose_factory=None,
+):
+    """Create a fault-protocol dataset view without reloading annotation infos.
+
+    ``run_bd_temporal_support_p0.protocol_dataset`` rebuilds the entire dataset
+    for every protocol.  On full nuScenes that duplicates the 599 MiB annotation
+    pickle as a much larger Python object graph per protocol and per worker.
+    P2-A only changes the ``ApplyPartialObservation.schedule_file`` transform.
+    A shallow dataset view can therefore safely reuse immutable ``data_infos``
+    and dataset metadata while owning an independent pipeline object.
+
+    This helper is execution-only.  It must be validated against the canonical
+    builder on excluded engineering frames before formal extraction.
+    """
+    if schedule is None:
+        raise ValueError("shared protocol view requires a non-clean schedule")
+    if not hasattr(clean_dataset, "data_infos"):
+        raise RuntimeError("clean dataset has no data_infos to share")
+
+    value = copy.deepcopy(config.data.test)
+    nodes = [
+        node for node in value.pipeline
+        if node.get("type") == "ApplyPartialObservation"
+    ]
+    if len(nodes) != 1:
+        raise RuntimeError(
+            f"expected one ApplyPartialObservation, got {len(nodes)}"
+        )
+    nodes[0]["schedule_file"] = str(schedule)
+    value.test_mode = True
+
+    if compose_factory is None:
+        from mmdet.datasets.pipelines import Compose
+        compose_factory = Compose
+
+    shared = copy.copy(clean_dataset)
+    shared.pipeline = compose_factory(value.pipeline)
+    shared.test_mode = True
+
+    if shared is clean_dataset:
+        raise RuntimeError("shared protocol dataset unexpectedly aliases base object")
+    if shared.data_infos is not clean_dataset.data_infos:
+        raise RuntimeError("shared protocol dataset duplicated data_infos")
+    if len(shared) != len(clean_dataset):
+        raise RuntimeError("shared protocol dataset length changed")
+    return shared
 
 
 def cheap_train_oracle_diagnostics(
