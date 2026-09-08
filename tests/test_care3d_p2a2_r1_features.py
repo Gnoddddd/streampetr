@@ -8,6 +8,7 @@ from sklearn.metrics import roc_auc_score
 
 from analysis.care3d_p2a2_r1_features import (
     EVIDENCE_FEATURE_COLUMNS,
+    MODEL_FEATURE_COLUMNS,
     finite_model_matrix,
     offline_disagreement_labels,
     relative_candidate_features,
@@ -120,7 +121,16 @@ def test_context_normalization_is_frozen_and_protocol_free():
     assert result["p2a0_is_propagated"].tolist() == [0]
     assert result["lineage_position_norm"].tolist() == [1.0]
     assert result["target_frame_norm"].tolist() == [1.0]
-    assert "protocol" not in EVIDENCE_FEATURE_COLUMNS
+    assert "protocol" not in MODEL_FEATURE_COLUMNS
+
+
+def test_raw_predicted_classes_are_exported_but_not_continuous_model_features():
+    assert "A_predicted_class" in EVIDENCE_FEATURE_COLUMNS
+    assert "L_predicted_class" in EVIDENCE_FEATURE_COLUMNS
+    assert "A_predicted_class" not in MODEL_FEATURE_COLUMNS
+    assert "L_predicted_class" not in MODEL_FEATURE_COLUMNS
+    assert "A_class_matches_anchor" in MODEL_FEATURE_COLUMNS
+    assert "L_class_matches_anchor" in MODEL_FEATURE_COLUMNS
 
 
 def test_feature_computation_has_no_gt_oracle_clean_future_or_protocol_argument():
@@ -170,17 +180,43 @@ def test_ineligible_candidate_is_not_given_a_finite_rank_or_margin():
     assert np.isnan(result["L_column_margin"][0])
 
 
-def test_fixed_model_encoding_handles_only_no_column_competitor_case():
+@pytest.mark.parametrize(
+    "a_margin,l_margin,raw_delta,expected",
+    [
+        (float("inf"), float("inf"), float("nan"), (1.0, 1.0, 0.0)),
+        (float("inf"), 0.2, float("-inf"), (1.0, 0.2, -0.8)),
+        (0.2, float("inf"), float("inf"), (0.2, 1.0, 0.8)),
+    ],
+)
+def test_fixed_model_recomputes_encoded_column_margin_delta(
+    a_margin, l_margin, raw_delta, expected
+):
     frame = pd.DataFrame({column: [0.0] for column in EVIDENCE_FEATURE_COLUMNS})
-    frame["A_column_margin"] = [float("inf")]
-    frame["L_column_margin"] = [float("inf")]
-    frame["delta_column_margin"] = [float("nan")]
+    frame["A_column_margin"] = [a_margin]
+    frame["L_column_margin"] = [l_margin]
+    frame["delta_column_margin"] = [raw_delta]
     matrix = finite_model_matrix(frame)
-    columns = {name: index for index, name in enumerate(EVIDENCE_FEATURE_COLUMNS)}
-    assert matrix[0, columns["A_column_margin"]] == 1.0
-    assert matrix[0, columns["L_column_margin"]] == 1.0
-    assert matrix[0, columns["delta_column_margin"]] == 0.0
-    frame["A_total_cost"] = [float("inf")]
+    columns = {name: index for index, name in enumerate(MODEL_FEATURE_COLUMNS)}
+    observed = tuple(
+        matrix[0, columns[name]]
+        for name in ("A_column_margin", "L_column_margin", "delta_column_margin")
+    )
+    assert observed == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("name", ["A_column_margin", "L_column_margin"])
+@pytest.mark.parametrize("invalid", [float("nan"), float("-inf")])
+def test_fixed_model_rejects_invalid_candidate_column_margins(name, invalid):
+    frame = pd.DataFrame({column: [0.0] for column in EVIDENCE_FEATURE_COLUMNS})
+    frame[name] = [invalid]
+    with pytest.raises(RuntimeError, match="invalid no-competitor encoding input"):
+        finite_model_matrix(frame)
+
+
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf")])
+def test_fixed_model_rejects_nonfinite_other_model_features(invalid):
+    frame = pd.DataFrame({column: [0.0] for column in EVIDENCE_FEATURE_COLUMNS})
+    frame["A_total_cost"] = [invalid]
     with pytest.raises(RuntimeError, match="outside column margins"):
         finite_model_matrix(frame)
 

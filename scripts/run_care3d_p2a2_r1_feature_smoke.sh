@@ -12,7 +12,9 @@ python scripts/export_care3d_p2a2_r1_features.py \
 python - <<'PY'
 import json
 from pathlib import Path
+import numpy as np
 import pandas as pd
+from analysis.care3d_p2a2_r1_features import finite_model_matrix
 
 report = Path("reports/care3d/p2a2_r1_relative_evidence")
 smoke = json.loads((report / "engineering_smoke.json").read_text())
@@ -38,5 +40,7 @@ if (rows.p2a0_selected_query == rows.lineage_child_query).any():
     raise RuntimeError("R1-F0 smoke exported agreement rows")
 if not (rows[["p2a0_wins", "lineage_wins", "both_wrong"]].sum(axis=1) == 1).all():
     raise RuntimeError("R1-F0 smoke labels are not exhaustive")
+if not np.isfinite(finite_model_matrix(rows)).all():
+    raise RuntimeError("R1-F0 encoded model matrix is not finite")
 print(json.dumps(smoke, indent=2, sort_keys=True))
 PY

@@ -35,6 +35,13 @@ EVIDENCE_FEATURE_COLUMNS = (
     "anchor_is_propagated", "p2a0_is_propagated",
     "lineage_position_norm", "target_frame_norm",
 )
+MODEL_FEATURE_COLUMNS = tuple(
+    column for column in EVIDENCE_FEATURE_COLUMNS
+    if column not in {"A_predicted_class", "L_predicted_class"}
+)
+assert "A_predicted_class" not in MODEL_FEATURE_COLUMNS
+assert "L_predicted_class" not in MODEL_FEATURE_COLUMNS
+assert "protocol" not in MODEL_FEATURE_COLUMNS
 
 CHEAP_BASELINE_DECISIVE_AUROC = {
     "blur_back": 0.756640,
@@ -48,21 +55,23 @@ def finite_model_matrix(frame: pd.DataFrame) -> np.ndarray:
     """Encode the extended-real no-column-competitor case without row loss.
 
     Raw exported margins retain the exact +inf/NaN results of their registered
-    definitions.  Only the three column-margin inputs have a fixed, label-free
-    model encoding: +inf (no second finite anchor) maps to the positive boundary
-    sentinel 1, and inf-inf maps to zero difference.  Every other non-finite
-    value remains an error.
+    definitions.  A/L +inf (no second finite anchor) maps to the fixed positive
+    boundary sentinel 1, after which the model delta is recomputed as encoded
+    L minus encoded A.  Every other non-finite model feature remains an error.
     """
-    matrix = frame.loc[:, EVIDENCE_FEATURE_COLUMNS].to_numpy(dtype=np.float64)
-    indexes = {name: index for index, name in enumerate(EVIDENCE_FEATURE_COLUMNS)}
-    allowed = {
-        indexes["A_column_margin"],
-        indexes["L_column_margin"],
+    matrix = frame.loc[:, MODEL_FEATURE_COLUMNS].to_numpy(dtype=np.float64)
+    indexes = {name: index for index, name in enumerate(MODEL_FEATURE_COLUMNS)}
+    column_margin_indexes = {
+        indexes["A_column_margin"], indexes["L_column_margin"],
         indexes["delta_column_margin"],
     }
     _bad_rows, bad_columns = np.nonzero(~np.isfinite(matrix))
-    if any(int(column) not in allowed for column in bad_columns.tolist()):
-        names = sorted({EVIDENCE_FEATURE_COLUMNS[int(column)] for column in bad_columns})
+    invalid_columns = {
+        int(column) for column in bad_columns.tolist()
+        if int(column) not in column_margin_indexes
+    }
+    if invalid_columns:
+        names = sorted({MODEL_FEATURE_COLUMNS[column] for column in invalid_columns})
         raise RuntimeError(f"non-finite R1-F0 evidence outside column margins: {names}")
     output = matrix.copy()
     for name in ("A_column_margin", "L_column_margin"):
@@ -71,10 +80,10 @@ def finite_model_matrix(frame: pd.DataFrame) -> np.ndarray:
         if np.isneginf(values).any() or np.isnan(values).any():
             raise RuntimeError(f"invalid no-competitor encoding input: {name}")
         values[np.isposinf(values)] = COLUMN_NO_COMPETITOR_SENTINEL
-    delta = output[:, indexes["delta_column_margin"]]
-    if np.isinf(delta).any():
-        raise RuntimeError("one-sided infinite delta_column_margin is unsupported")
-    delta[np.isnan(delta)] = 0.0
+    output[:, indexes["delta_column_margin"]] = (
+        output[:, indexes["L_column_margin"]]
+        - output[:, indexes["A_column_margin"]]
+    )
     if not np.isfinite(output).all():
         raise RuntimeError("R1-F0 fixed model matrix remains non-finite")
     return output

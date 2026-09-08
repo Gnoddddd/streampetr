@@ -23,7 +23,7 @@ from sklearn.preprocessing import StandardScaler
 
 from analysis.care3d_p2a2_r1_features import (
     CHEAP_BASELINE_DECISIVE_AUROC,
-    EVIDENCE_FEATURE_COLUMNS,
+    MODEL_FEATURE_COLUMNS,
     finite_model_matrix,
 )
 from analysis.care3d_p2a_association import PROTOCOLS

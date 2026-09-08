@@ -35,10 +35,11 @@ NaN margin, which the analysis rejects.
 
 When a candidate has no second finite anchor, the exact raw column margin is
 `+inf`. Raw CSVs retain that value. The fixed model-input conversion maps only
-this no-competitor column-margin case to the positive boundary sentinel `1.0`;
-when both A and L have no competitor, their undefined `inf-inf` delta maps to
-`0.0`. Any other non-finite feature is rejected. This conversion is fixed,
-label-free, protocol-free, and preserves every disagreement row.
+this no-competitor column-margin case to the positive boundary sentinel `1.0`.
+The model delta is then recomputed from the encoded L and A margins, including
+one-sided no-competitor cases. Any invalid A/L margin or other non-finite model
+feature is rejected. This conversion is fixed, label-free, protocol-free, and
+preserves every disagreement row.
 
 Retained context is limited to:
 
@@ -60,8 +61,9 @@ and exhaustive: `P2A0_WINS`, `LINEAGE_WINS`, or `BOTH_WRONG`.
 
 All diagnostics use five-fold `GroupKFold(group=scene_token)` over the pooled
 protocol rows. Consequently every protocol view of a scene remains in the same
-fold. Input columns are frozen in `EVIDENCE_FEATURE_COLUMNS`; protocol is not
-included.
+fold. Raw CSV columns remain frozen in `EVIDENCE_FEATURE_COLUMNS`. Model inputs
+use `MODEL_FEATURE_COLUMNS`, which excludes the categorical identifiers
+`A_predicted_class` and `L_predicted_class`; protocol is also excluded.
 
 The decisive-preference diagnostic excludes both-wrong rows, targets lineage
 wins, and uses `StandardScaler` plus balanced logistic regression with
