@@ -72,7 +72,7 @@ from scripts.run_prospective_failure_features import (  # noqa: E402
 )
 
 
-REPORT = ROOT / "reports/care3d/p2a2_r1_relative_evidence"
+REPORT = ROOT / "reports/care3d/p2a2_r1_relative_evidence/schema_2"
 R0_REPORT = ROOT / "reports/care3d/p2a2_memory_lineage_r0"
 P2A0_REPORT = ROOT / "reports/care3d/p2a_online_query_association"
 PROTOCOL_PATHS = {
@@ -80,7 +80,7 @@ PROTOCOL_PATHS = {
     "crash_back": ROOT / "protocols/presets/camera_crash_back_10f.json",
     "dark_back": ROOT / "protocols/presets/dark_back_10f_s09.json",
 }
-SCHEMA = 1
+SCHEMA = 2
 STOP_REQUESTED = False
 METADATA_COLUMNS = (
     "scene_token", "instance_token", "anchor_frame_idx", "target_frame_idx",
@@ -193,7 +193,10 @@ def require_smoke() -> None:
     value = json.loads(path.read_text())
     if not all((
         value.get("status") == "P2A2_R1_F0_ENGINEERING_SMOKE_PASSED",
+        value.get("schema_version") == SCHEMA,
         value.get("r0_assignment_exact") is True,
+        value.get("p2a0_selected_query_exact") is True,
+        value.get("lineage_child_query_exact") is True,
         value.get("p2a0_frozen_cost_exact") is True,
         value.get("feature_non_mutating") is True,
         value.get("probe_val_read") is False,
@@ -600,9 +603,13 @@ def main() -> None:
             feature_values = frame.loc[:, EVIDENCE_FEATURE_COLUMNS].to_numpy(np.float64)
             nonfinite_feature_values = int((~np.isfinite(feature_values)).sum())
             model_matrix_finite = bool(np.isfinite(finite_model_matrix(frame)).all())
+            lineage_geometry_ineligible_rows = int(
+                (frame.L_geometry_eligible.astype(int) == 0).sum()
+            )
         else:
             nonfinite_feature_values = 0
             model_matrix_finite = True
+            lineage_geometry_ineligible_rows = 0
         prefix = out / scene
         atomic_frame(prefix.with_suffix(".rows.csv"), frame)
         summary = {
@@ -612,6 +619,7 @@ def main() -> None:
             "eligible_objects": int(len(main_frame)),
             "protocol_rows": int(len(r0_rows)),
             "disagreement_rows": int(len(frame)),
+            "lineage_geometry_ineligible_rows": lineage_geometry_ineligible_rows,
             "nonfinite_feature_values": nonfinite_feature_values,
             "fixed_model_matrix_finite": model_matrix_finite,
             "p2a_collision_excluded_rows": int(p2a_audit["total_excluded_rows"]),

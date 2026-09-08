@@ -30,8 +30,9 @@ from analysis.care3d_p2a_association import PROTOCOLS
 
 
 ROOT = Path(__file__).resolve().parents[1]
-REPORT = ROOT / "reports/care3d/p2a2_r1_relative_evidence"
+REPORT = ROOT / "reports/care3d/p2a2_r1_relative_evidence/schema_2"
 R0_REPORT = ROOT / "reports/care3d/p2a2_memory_lineage_r0"
+SCHEMA = 2
 RANDOM_STATE = 314159
 N_SPLITS = 5
 # sklearn requires explicitly supplied multiclass ROC labels to be ordered.
@@ -52,6 +53,8 @@ def atomic_csv(path: Path, frame: pd.DataFrame) -> None:
 
 def load_rows() -> pd.DataFrame:
     progress = json.loads((REPORT / "progress_manifest.json").read_text())
+    if progress.get("schema_version") != SCHEMA:
+        raise RuntimeError("R1-F0 analysis requires schema-2 progress")
     if progress.get("completed_scenes") != 419:
         raise RuntimeError("R1-F0 analysis requires all 419 probe-train scenes")
     if progress.get("probe_val_read") is not False or progress.get("probe_test_read") is not False:
@@ -66,6 +69,7 @@ def load_rows() -> pd.DataFrame:
         frame = pd.read_csv(prefix.with_suffix(".rows.csv"))
         if not all((
             marker.get("complete"),
+            marker.get("schema_version") == SCHEMA,
             marker.get("split") == "probe_train",
             marker.get("r0_assignment_exact") is True,
             marker.get("p2a0_frozen_cost_exact") is True,

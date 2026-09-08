@@ -22,7 +22,9 @@ EVIDENCE_FEATURE_COLUMNS = (
     "A_embedding", "L_embedding", "delta_embedding",
     "A_class_cost", "L_class_cost", "delta_class_cost",
     "A_total_cost", "L_total_cost", "delta_total_cost",
+    "A_ungated_total_cost", "L_ungated_total_cost", "delta_ungated_total_cost",
     "A_distance_m", "L_distance_m", "delta_distance_m",
+    "A_geometry_eligible", "L_geometry_eligible",
     "A_anchor_class_probability", "L_anchor_class_probability",
     "delta_anchor_class_probability",
     "A_top1_probability", "L_top1_probability", "delta_top1_probability",
@@ -32,12 +34,26 @@ EVIDENCE_FEATURE_COLUMNS = (
     "A_row_margin", "L_row_margin", "delta_row_margin",
     "A_column_margin", "L_column_margin", "delta_column_margin",
     "A_mutual", "L_mutual",
+    "A_ungated_row_rank", "L_ungated_row_rank", "delta_ungated_row_rank",
+    "A_ungated_row_margin", "L_ungated_row_margin", "delta_ungated_row_margin",
+    "A_ungated_column_margin", "L_ungated_column_margin",
+    "delta_ungated_column_margin",
+    "A_ungated_mutual", "L_ungated_mutual",
     "anchor_is_propagated", "p2a0_is_propagated",
     "lineage_position_norm", "target_frame_norm",
 )
+HARD_AUDIT_FEATURE_COLUMNS = {
+    "A_total_cost", "L_total_cost", "delta_total_cost",
+    "A_row_rank", "L_row_rank", "delta_row_rank",
+    "A_row_margin", "L_row_margin", "delta_row_margin",
+    "A_column_margin", "L_column_margin", "delta_column_margin",
+    "A_mutual", "L_mutual",
+}
 MODEL_FEATURE_COLUMNS = tuple(
     column for column in EVIDENCE_FEATURE_COLUMNS
-    if column not in {"A_predicted_class", "L_predicted_class"}
+    if column not in {
+        "A_predicted_class", "L_predicted_class", *HARD_AUDIT_FEATURE_COLUMNS,
+    }
 )
 assert "A_predicted_class" not in MODEL_FEATURE_COLUMNS
 assert "L_predicted_class" not in MODEL_FEATURE_COLUMNS
@@ -52,18 +68,20 @@ COLUMN_NO_COMPETITOR_SENTINEL = 1.0
 
 
 def finite_model_matrix(frame: pd.DataFrame) -> np.ndarray:
-    """Encode the extended-real no-column-competitor case without row loss.
+    """Return the finite schema-2 model matrix without inspecting raw audits.
 
-    Raw exported margins retain the exact +inf/NaN results of their registered
-    definitions.  A/L +inf (no second finite anchor) maps to the fixed positive
-    boundary sentinel 1, after which the model delta is recomputed as encoded
-    L minus encoded A.  Every other non-finite model feature remains an error.
+    Raw hard-gated fields retain their exact +inf/NaN audit values and are not
+    model inputs.  Ungated A/L column-margin +inf (no competing online anchor)
+    maps to the fixed positive boundary sentinel 1, after which its model delta
+    is recomputed as encoded L minus encoded A.  Every other non-finite model
+    feature remains an error.
     """
     matrix = frame.loc[:, MODEL_FEATURE_COLUMNS].to_numpy(dtype=np.float64)
     indexes = {name: index for index, name in enumerate(MODEL_FEATURE_COLUMNS)}
     column_margin_indexes = {
-        indexes["A_column_margin"], indexes["L_column_margin"],
-        indexes["delta_column_margin"],
+        indexes["A_ungated_column_margin"],
+        indexes["L_ungated_column_margin"],
+        indexes["delta_ungated_column_margin"],
     }
     _bad_rows, bad_columns = np.nonzero(~np.isfinite(matrix))
     invalid_columns = {
@@ -74,19 +92,54 @@ def finite_model_matrix(frame: pd.DataFrame) -> np.ndarray:
         names = sorted({MODEL_FEATURE_COLUMNS[column] for column in invalid_columns})
         raise RuntimeError(f"non-finite R1-F0 evidence outside column margins: {names}")
     output = matrix.copy()
-    for name in ("A_column_margin", "L_column_margin"):
+    for name in ("A_ungated_column_margin", "L_ungated_column_margin"):
         column = indexes[name]
         values = output[:, column]
         if np.isneginf(values).any() or np.isnan(values).any():
             raise RuntimeError(f"invalid no-competitor encoding input: {name}")
         values[np.isposinf(values)] = COLUMN_NO_COMPETITOR_SENTINEL
-    output[:, indexes["delta_column_margin"]] = (
-        output[:, indexes["L_column_margin"]]
-        - output[:, indexes["A_column_margin"]]
+    output[:, indexes["delta_ungated_column_margin"]] = (
+        output[:, indexes["L_ungated_column_margin"]]
+        - output[:, indexes["A_ungated_column_margin"]]
     )
     if not np.isfinite(output).all():
         raise RuntimeError("R1-F0 fixed model matrix remains non-finite")
     return output
+
+
+def ungated_weighted_cost(
+    components: Mapping[str, Tensor],
+    frozen_cost: Tensor,
+) -> Tensor:
+    """Compute finite 0.4/0.4/0.2 affinity and audit the frozen hard gate."""
+    required = {"geometry", "embedding", "class", "geometry_allowed"}
+    if not required <= set(components):
+        raise ValueError(f"association components missing {sorted(required - set(components))}")
+    geometry = components["geometry"]
+    embedding = components["embedding"]
+    class_cost = components["class"]
+    allowed = components["geometry_allowed"]
+    expected = tuple(frozen_cost.shape)
+    if frozen_cost.ndim != 2 or int(frozen_cost.shape[1]) != QUERY_COUNT:
+        raise ValueError("frozen_cost must be [N,900]")
+    if any(tuple(value.shape) != expected for value in (geometry, embedding, class_cost, allowed)):
+        raise RuntimeError("ungated relative-affinity component layout changed")
+    soft_cost = 0.4 * geometry + 0.4 * embedding + 0.2 * class_cost
+    if not torch.isfinite(soft_cost).all():
+        raise RuntimeError("R1-F0 ungated weighted cost contains non-finite values")
+    if not torch.equal(soft_cost[allowed], frozen_cost[allowed]):
+        difference = (soft_cost[allowed] - frozen_cost[allowed]).abs()
+        max_abs_diff = float(difference.max().item()) if difference.numel() else 0.0
+        raise RuntimeError(
+            "R1-F0 ungated/frozen cost differs inside geometry gate: "
+            f"max_abs_diff={max_abs_diff:.17g}"
+        )
+    rejected = ~allowed
+    if rejected.any():
+        rejected_frozen = frozen_cost[rejected]
+        if not (torch.isinf(rejected_frozen) & (rejected_frozen > 0)).all():
+            raise RuntimeError("R1-F0 frozen cost is not +inf outside geometry gate")
+    return soft_cost
 
 
 def _arrays(
@@ -102,7 +155,9 @@ def _arrays(
         key: value.detach().float().cpu().numpy()
         for key, value in components.items() if key in required
     }
+    soft_cost = ungated_weighted_cost(components, frozen_cost)
     output["total"] = frozen_cost.detach().float().cpu().numpy()
+    output["ungated_total"] = soft_cost.detach().float().cpu().numpy()
     expected = tuple(frozen_cost.shape)
     if any(tuple(value.shape) != expected for value in output.values()):
         raise RuntimeError("relative-evidence component layout changed")
@@ -195,6 +250,9 @@ def relative_candidate_features(
 
     disagreement = selected != lineage
     rows = np.flatnonzero(disagreement)
+    row_indexes = np.arange(n, dtype=np.int64)
+    if not np.all(values["geometry_allowed"][row_indexes, selected]):
+        raise RuntimeError("R1-F0 frozen P2-A0 candidate is geometry-ineligible")
     logits_probability = fault_logits.detach().float().sigmoid()
     top1_probability, predicted_class = logits_probability.max(dim=-1)
     top1_probability_np = top1_probability.cpu().numpy()
@@ -211,6 +269,7 @@ def relative_candidate_features(
         ("embedding", "embedding"),
         ("class_cost", "class"),
         ("total_cost", "total"),
+        ("ungated_total_cost", "ungated_total"),
         ("distance_m", "distance_m"),
     )
     for row in rows.tolist():
@@ -245,6 +304,12 @@ def relative_candidate_features(
         output["L_class_matches_anchor"].append(
             int(predicted_class_np[l] == anchor_classes_np[row])
         )
+        output["A_geometry_eligible"].append(
+            int(values["geometry_allowed"][row, a])
+        )
+        output["L_geometry_eligible"].append(
+            int(values["geometry_allowed"][row, l])
+        )
 
         a_rank, a_row_margin = _row_rank_and_margin(values["total"][row], a)
         l_rank, l_row_margin = _row_rank_and_margin(values["total"][row], l)
@@ -262,6 +327,37 @@ def relative_candidate_features(
         output["delta_column_margin"].append(l_column_margin - a_column_margin)
         output["A_mutual"].append(int(a_mutual))
         output["L_mutual"].append(int(l_mutual))
+
+        a_rank, a_row_margin = _row_rank_and_margin(values["ungated_total"][row], a)
+        l_rank, l_row_margin = _row_rank_and_margin(values["ungated_total"][row], l)
+        if not np.isfinite([a_rank, l_rank, a_row_margin, l_row_margin]).all():
+            raise RuntimeError("R1-F0 ungated row evidence is non-finite")
+        output["A_ungated_row_rank"].append(a_rank)
+        output["L_ungated_row_rank"].append(l_rank)
+        output["delta_ungated_row_rank"].append(l_rank - a_rank)
+        output["A_ungated_row_margin"].append(a_row_margin)
+        output["L_ungated_row_margin"].append(l_row_margin)
+        output["delta_ungated_row_margin"].append(l_row_margin - a_row_margin)
+
+        a_mutual, a_column_margin = _column_ownership(
+            values["ungated_total"], row, a
+        )
+        l_mutual, l_column_margin = _column_ownership(
+            values["ungated_total"], row, l
+        )
+        if n >= 2 and not np.isfinite([a_column_margin, l_column_margin]).all():
+            raise RuntimeError("R1-F0 ungated column evidence is non-finite")
+        if np.isnan([a_column_margin, l_column_margin]).any() or np.isneginf(
+            [a_column_margin, l_column_margin]
+        ).any():
+            raise RuntimeError("R1-F0 invalid ungated no-competitor margin")
+        output["A_ungated_column_margin"].append(a_column_margin)
+        output["L_ungated_column_margin"].append(l_column_margin)
+        output["delta_ungated_column_margin"].append(
+            l_column_margin - a_column_margin
+        )
+        output["A_ungated_mutual"].append(int(a_mutual))
+        output["L_ungated_mutual"].append(int(l_mutual))
         output["anchor_is_propagated"].append(int(anchor_queries_np[row] >= 644))
         output["p2a0_is_propagated"].append(int(a >= 644))
         output["lineage_position_norm"].append(float(positions[row] / 255.0))
@@ -271,8 +367,11 @@ def relative_candidate_features(
     integer_columns = {
         "source_row_index", "p2a0_selected_query", "lineage_child_query",
         "A_predicted_class", "L_predicted_class", "A_class_matches_anchor",
-        "L_class_matches_anchor", "A_row_rank", "L_row_rank", "delta_row_rank",
+        "L_class_matches_anchor", "A_geometry_eligible", "L_geometry_eligible",
+        "A_row_rank", "L_row_rank", "delta_row_rank",
         "A_mutual", "L_mutual", "anchor_is_propagated", "p2a0_is_propagated",
+        "A_ungated_row_rank", "L_ungated_row_rank", "delta_ungated_row_rank",
+        "A_ungated_mutual", "L_ungated_mutual",
     }
     for key, column in output.items():
         dtype = np.int64 if key in integer_columns else np.float64

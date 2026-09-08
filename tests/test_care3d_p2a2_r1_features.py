@@ -8,11 +8,15 @@ from sklearn.metrics import roc_auc_score
 
 from analysis.care3d_p2a2_r1_features import (
     EVIDENCE_FEATURE_COLUMNS,
+    HARD_AUDIT_FEATURE_COLUMNS,
     MODEL_FEATURE_COLUMNS,
     finite_model_matrix,
     offline_disagreement_labels,
     relative_candidate_features,
+    ungated_weighted_cost,
 )
+from analysis.care3d_p2a2_lineage import FROZEN_P2A0_CONFIG
+from analysis.care3d_p2a_association import hungarian_with_unmatched, weighted_cost
 from scripts.analyze_care3d_p2a2_r1_features import (
     CLASSES,
     binary_oof,
@@ -31,15 +35,21 @@ def fixture_inputs():
         "distance_m": torch.full(shape, 9.6),
         "geometry_allowed": torch.ones(shape, dtype=torch.bool),
     }
-    cost = torch.full(shape, float("inf"))
-    # Row 0: A=1, L=2; query 3 determines row margin for A.
-    cost[0, 1], cost[0, 2], cost[0, 3] = 0.10, 0.30, 0.20
-    cost[1, 1], cost[1, 2], cost[1, 4] = 0.20, 0.10, 0.15
-    cost[2, 1], cost[2, 2], cost[2, 5] = 0.40, 0.50, 0.05
+    # Row 0: A=1, L=2; query 3 determines row margin for A.  Every
+    # geometry-eligible frozen value is produced by the frozen weighted cost.
+    for row, query, value in (
+        (0, 3, 0.25),
+        (1, 1, 0.20), (1, 2, 0.10), (1, 4, 0.15),
+        (2, 1, 0.40), (2, 2, 0.50), (2, 5, 0.05),
+    ):
+        components["geometry"][row, query] = value
+        components["embedding"][row, query] = value
+        components["class"][row, query] = value
     components["geometry"][0, 1], components["geometry"][0, 2] = 0.1, 0.4
     components["embedding"][0, 1], components["embedding"][0, 2] = 0.2, 0.3
     components["class"][0, 1], components["class"][0, 2] = 0.25, 0.5
     components["distance_m"][0, 1], components["distance_m"][0, 2] = 1.2, 4.8
+    cost = weighted_cost(components, FROZEN_P2A0_CONFIG)
     logits = torch.full((900, 3), -4.0)
     logits[1] = torch.tensor([0.0, 2.0, -1.0])
     logits[2] = torch.tensor([3.0, 1.0, -2.0])
@@ -62,9 +72,11 @@ def test_relative_candidate_values_and_deltas_are_exact():
     assert result["A_geometry"][0] == pytest.approx(0.1)
     assert result["L_geometry"][0] == pytest.approx(0.4)
     assert result["delta_geometry"][0] == pytest.approx(0.3)
-    assert result["A_total_cost"][0] == pytest.approx(0.1)
-    assert result["L_total_cost"][0] == pytest.approx(0.3)
-    assert result["delta_total_cost"][0] == pytest.approx(0.2)
+    assert result["A_total_cost"][0] == pytest.approx(0.17)
+    assert result["L_total_cost"][0] == pytest.approx(0.38)
+    assert result["delta_total_cost"][0] == pytest.approx(0.21)
+    assert result["A_ungated_total_cost"][0] == result["A_total_cost"][0]
+    assert result["L_ungated_total_cost"][0] == result["L_total_cost"][0]
     assert result["A_anchor_class_probability"][0] == pytest.approx(0.75)
     assert result["L_anchor_class_probability"][0] == pytest.approx(0.5)
     assert result["delta_anchor_class_probability"][0] == pytest.approx(-0.25)
@@ -83,9 +95,9 @@ def test_row_local_rank_and_margin_ignore_ineligible_queries():
     assert result["A_row_rank"].tolist() == [1]
     assert result["L_row_rank"].tolist() == [3]
     assert result["delta_row_rank"].tolist() == [2]
-    assert result["A_row_margin"][0] == pytest.approx(0.10)
-    assert result["L_row_margin"][0] == pytest.approx(-0.20)
-    assert result["delta_row_margin"][0] == pytest.approx(-0.30)
+    assert result["A_row_margin"][0] == pytest.approx(0.08)
+    assert result["L_row_margin"][0] == pytest.approx(-0.21)
+    assert result["delta_row_margin"][0] == pytest.approx(-0.29)
 
 
 def test_column_ownership_margin_sign_encodes_mutuality():
@@ -96,9 +108,9 @@ def test_column_ownership_margin_sign_encodes_mutuality():
     )
     assert result["A_mutual"].tolist() == [1]
     assert result["L_mutual"].tolist() == [0]
-    assert result["A_column_margin"][0] == pytest.approx(0.10)
-    assert result["L_column_margin"][0] == pytest.approx(-0.20)
-    assert result["delta_column_margin"][0] == pytest.approx(-0.30)
+    assert result["A_column_margin"][0] == pytest.approx(0.03)
+    assert result["L_column_margin"][0] == pytest.approx(-0.28)
+    assert result["delta_column_margin"][0] == pytest.approx(-0.31)
 
 
 def test_only_disagreement_rows_are_exported():
@@ -131,6 +143,11 @@ def test_raw_predicted_classes_are_exported_but_not_continuous_model_features():
     assert "L_predicted_class" not in MODEL_FEATURE_COLUMNS
     assert "A_class_matches_anchor" in MODEL_FEATURE_COLUMNS
     assert "L_class_matches_anchor" in MODEL_FEATURE_COLUMNS
+    assert not (HARD_AUDIT_FEATURE_COLUMNS & set(MODEL_FEATURE_COLUMNS))
+    assert "A_geometry_eligible" in MODEL_FEATURE_COLUMNS
+    assert "L_geometry_eligible" in MODEL_FEATURE_COLUMNS
+    assert "A_ungated_total_cost" in MODEL_FEATURE_COLUMNS
+    assert "L_ungated_mutual" in MODEL_FEATURE_COLUMNS
 
 
 def test_feature_computation_has_no_gt_oracle_clean_future_or_protocol_argument():
@@ -167,17 +184,65 @@ def test_feature_extraction_does_not_mutate_frozen_tensors():
     assert all(torch.equal(value, before_components[key]) for key, value in components.items())
 
 
-def test_ineligible_candidate_is_not_given_a_finite_rank_or_margin():
+def test_geometry_ineligible_lineage_has_finite_ungated_evidence_and_model_matrix():
     components, cost, logits = fixture_inputs()
-    cost[0, 2] = float("inf")
+    components["geometry_allowed"][0, 2] = False
+    components["distance_m"][0, 2] = 13.0
+    cost = weighted_cost(components, FROZEN_P2A0_CONFIG)
+    assignment_before = hungarian_with_unmatched(cost, FROZEN_P2A0_CONFIG.max_cost)
+    selected = assignment_before["selected_query"]
+    lineage = selected.copy()
+    lineage[0] = 2
     result = relative_candidate_features(
         components, cost, logits, [1, 0, 2], [650, 20, 30],
-        [1, 4, 5], [2, 4, 5], [10, 20, 30], target_frame_idx=3,
+        selected, lineage, [10, 20, 30], target_frame_idx=3,
     )
+    assignment_after = hungarian_with_unmatched(cost, FROZEN_P2A0_CONFIG.max_cost)
+    assert np.array_equal(
+        assignment_before["selected_query"], assignment_after["selected_query"]
+    )
+    assert np.array_equal(
+        assignment_before["selected_cost"], assignment_after["selected_cost"]
+    )
+    assert result["A_geometry_eligible"].tolist() == [1]
+    assert result["L_geometry_eligible"].tolist() == [0]
+    assert np.isfinite(result["A_total_cost"][0])
+    assert np.isposinf(result["L_total_cost"][0])
     assert result["L_row_rank"].tolist() == [0]
     assert np.isnan(result["L_row_margin"][0])
     assert result["L_mutual"].tolist() == [0]
     assert np.isnan(result["L_column_margin"][0])
+    for name in (
+        "A_ungated_total_cost", "L_ungated_total_cost", "delta_ungated_total_cost",
+        "A_ungated_row_rank", "L_ungated_row_rank", "delta_ungated_row_rank",
+        "A_ungated_row_margin", "L_ungated_row_margin", "delta_ungated_row_margin",
+        "A_ungated_column_margin", "L_ungated_column_margin",
+        "delta_ungated_column_margin", "A_ungated_mutual", "L_ungated_mutual",
+    ):
+        assert np.isfinite(result[name]).all(), name
+    assert np.isfinite(finite_model_matrix(pd.DataFrame(result))).all()
+
+
+def test_ungated_cost_exactly_matches_frozen_cost_inside_geometry_gate():
+    components, _, _ = fixture_inputs()
+    components["geometry_allowed"][0, 2] = False
+    frozen = weighted_cost(components, FROZEN_P2A0_CONFIG)
+    soft = ungated_weighted_cost(components, frozen)
+    allowed = components["geometry_allowed"]
+    assert torch.equal(soft[allowed], frozen[allowed])
+    assert torch.isfinite(soft).all()
+    assert torch.isposinf(frozen[~allowed]).all()
+
+
+def test_geometry_ineligible_p2a0_candidate_is_rejected():
+    components, _, logits = fixture_inputs()
+    components["geometry_allowed"][0, 1] = False
+    cost = weighted_cost(components, FROZEN_P2A0_CONFIG)
+    with pytest.raises(RuntimeError, match="P2-A0 candidate is geometry-ineligible"):
+        relative_candidate_features(
+            components, cost, logits, [1, 0, 2], [650, 20, 30],
+            [1, 4, 5], [2, 4, 5], [10, 20, 30], target_frame_idx=3,
+        )
 
 
 @pytest.mark.parametrize(
@@ -192,19 +257,24 @@ def test_fixed_model_recomputes_encoded_column_margin_delta(
     a_margin, l_margin, raw_delta, expected
 ):
     frame = pd.DataFrame({column: [0.0] for column in EVIDENCE_FEATURE_COLUMNS})
-    frame["A_column_margin"] = [a_margin]
-    frame["L_column_margin"] = [l_margin]
-    frame["delta_column_margin"] = [raw_delta]
+    frame["A_ungated_column_margin"] = [a_margin]
+    frame["L_ungated_column_margin"] = [l_margin]
+    frame["delta_ungated_column_margin"] = [raw_delta]
     matrix = finite_model_matrix(frame)
     columns = {name: index for index, name in enumerate(MODEL_FEATURE_COLUMNS)}
     observed = tuple(
         matrix[0, columns[name]]
-        for name in ("A_column_margin", "L_column_margin", "delta_column_margin")
+        for name in (
+            "A_ungated_column_margin", "L_ungated_column_margin",
+            "delta_ungated_column_margin",
+        )
     )
     assert observed == pytest.approx(expected)
 
 
-@pytest.mark.parametrize("name", ["A_column_margin", "L_column_margin"])
+@pytest.mark.parametrize(
+    "name", ["A_ungated_column_margin", "L_ungated_column_margin"]
+)
 @pytest.mark.parametrize("invalid", [float("nan"), float("-inf")])
 def test_fixed_model_rejects_invalid_candidate_column_margins(name, invalid):
     frame = pd.DataFrame({column: [0.0] for column in EVIDENCE_FEATURE_COLUMNS})
@@ -216,9 +286,17 @@ def test_fixed_model_rejects_invalid_candidate_column_margins(name, invalid):
 @pytest.mark.parametrize("invalid", [float("nan"), float("inf")])
 def test_fixed_model_rejects_nonfinite_other_model_features(invalid):
     frame = pd.DataFrame({column: [0.0] for column in EVIDENCE_FEATURE_COLUMNS})
-    frame["A_total_cost"] = [invalid]
+    frame["A_ungated_total_cost"] = [invalid]
     with pytest.raises(RuntimeError, match="outside column margins"):
         finite_model_matrix(frame)
+
+
+def test_fixed_model_ignores_nonfinite_hard_gate_audit_features():
+    frame = pd.DataFrame({column: [0.0] for column in EVIDENCE_FEATURE_COLUMNS})
+    frame["L_total_cost"] = [float("inf")]
+    frame["L_row_margin"] = [float("nan")]
+    frame["L_column_margin"] = [float("nan")]
+    assert np.isfinite(finite_model_matrix(frame)).all()
 
 
 def test_cli_rejects_probe_val_and_probe_test():

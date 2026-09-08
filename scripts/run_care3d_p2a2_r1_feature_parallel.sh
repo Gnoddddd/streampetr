@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 DEVICE="${DEVICE:-cuda:0}"
 WORKERS="${P2A2_R1_WORKERS:-2}"
 MAX_SCENES_PER_SHARD="${P2A2_R1_MAX_SCENES_PER_SHARD:-}"
-LOG_DIR="outputs/care3d/p2a2_r1_relative_evidence"
+LOG_DIR="outputs/care3d/p2a2_r1_relative_evidence_schema_2"
 mkdir -p "$LOG_DIR"
 
 if [[ "$WORKERS" != "2" ]]; then
@@ -25,12 +25,14 @@ fi
 python - <<'PY'
 import json
 from pathlib import Path
-path = Path("reports/care3d/p2a2_r1_relative_evidence/engineering_smoke.json")
+path = Path("reports/care3d/p2a2_r1_relative_evidence/schema_2/engineering_smoke.json")
 if not path.exists():
     raise RuntimeError("run scripts/run_care3d_p2a2_r1_feature_smoke.sh first")
 value = json.loads(path.read_text())
 if value.get("status") != "P2A2_R1_F0_ENGINEERING_SMOKE_PASSED":
     raise RuntimeError("R1-F0 engineering smoke has not passed")
+if value.get("schema_version") != 2:
+    raise RuntimeError("R1-F0 engineering smoke is not schema 2")
 if value.get("probe_val_read") is not False or value.get("probe_test_read") is not False:
     raise RuntimeError("R1-F0 held-out split lock changed")
 print("PASS: R1-F0 probe-train feature extraction is eligible")

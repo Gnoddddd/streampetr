@@ -16,13 +16,16 @@ import numpy as np
 import pandas as pd
 from analysis.care3d_p2a2_r1_features import finite_model_matrix
 
-report = Path("reports/care3d/p2a2_r1_relative_evidence")
+report = Path("reports/care3d/p2a2_r1_relative_evidence/schema_2")
 smoke = json.loads((report / "engineering_smoke.json").read_text())
 if smoke.get("status") != "P2A2_R1_F0_ENGINEERING_SMOKE_PASSED":
     raise RuntimeError(f"R1-F0 engineering smoke failed: {smoke}")
+if smoke.get("schema_version") != 2:
+    raise RuntimeError("R1-F0 engineering smoke is not schema 2")
 for key in (
-    "r0_assignment_exact", "p2a0_frozen_cost_exact", "feature_non_mutating",
-    "fixed_model_matrix_finite",
+    "r0_assignment_exact", "p2a0_selected_query_exact",
+    "lineage_child_query_exact", "p2a0_frozen_cost_exact",
+    "feature_non_mutating", "fixed_model_matrix_finite",
 ):
     if smoke.get(key) is not True:
         raise RuntimeError(f"R1-F0 smoke invariant failed: {key}")
@@ -42,5 +45,7 @@ if not (rows[["p2a0_wins", "lineage_wins", "both_wrong"]].sum(axis=1) == 1).all(
     raise RuntimeError("R1-F0 smoke labels are not exhaustive")
 if not np.isfinite(finite_model_matrix(rows)).all():
     raise RuntimeError("R1-F0 encoded model matrix is not finite")
+if "lineage_geometry_ineligible_rows" not in smoke:
+    raise RuntimeError("R1-F0 smoke lacks geometry-ineligible diagnostic")
 print(json.dumps(smoke, indent=2, sort_keys=True))
 PY
