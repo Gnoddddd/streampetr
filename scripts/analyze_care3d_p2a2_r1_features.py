@@ -264,7 +264,7 @@ def main() -> None:
     beats_all = bool(gate_frame.beats_cheap_feature_baseline.astype(bool).all())
     passed = bool(pass_threshold and beats_all)
     result = {
-        "schema_version": 1,
+        "schema_version": SCHEMA,
         "status": (
             "PASS_R1_RELATIVE_EVIDENCE"
             if passed else "STOP_RELATIVE_EVIDENCE_INSUFFICIENT"
