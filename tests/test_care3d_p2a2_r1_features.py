@@ -1,4 +1,5 @@
 import inspect
+import json
 
 import numpy as np
 import pandas as pd
@@ -23,7 +24,13 @@ from scripts.analyze_care3d_p2a2_r1_features import (
     fold_ids,
     multiclass_oof,
 )
-from scripts.export_care3d_p2a2_r1_features import parse_args, parse_r1_split
+import scripts.export_care3d_p2a2_r1_features as r1_exporter
+from scripts.export_care3d_p2a2_r1_features import (
+    load_r0_rows,
+    parse_args,
+    parse_r1_split,
+    validate_r0_cohort_continuity,
+)
 
 
 def fixture_inputs():
@@ -310,6 +317,88 @@ def test_cli_rejects_probe_val_and_probe_test():
         parse_args(["--split", "probe_val"])
     with pytest.raises(SystemExit):
         parse_args(["--split", "probe_test"])
+
+
+def write_r0_source(tmp_path, scene, frame, **marker_overrides):
+    directory = tmp_path / "incremental/probe_train"
+    directory.mkdir(parents=True)
+    frame.to_csv(directory / f"{scene}.rows.csv", index=False)
+    marker = {
+        "complete": True,
+        "schema_version": 1,
+        "split": "probe_train",
+        "scene_token": scene,
+        "rows": len(frame),
+        "probe_val_read": False,
+        "probe_test_read": False,
+    }
+    marker.update(marker_overrides)
+    (directory / f"{scene}.complete.json").write_text(json.dumps(marker))
+
+
+def test_load_r0_rows_accepts_valid_empty_scene(monkeypatch, tmp_path):
+    scene = "empty-scene"
+    write_r0_source(tmp_path, scene, pd.DataFrame(columns=["protocol"]))
+    monkeypatch.setattr(r1_exporter, "R0_REPORT", tmp_path)
+    assert len(load_r0_rows(scene, False)) == 0
+
+
+def test_load_r0_rows_keeps_strict_protocol_set_for_nonempty_scene(
+    monkeypatch, tmp_path
+):
+    scene = "normal-scene"
+    frame = pd.DataFrame({"protocol": ["blur_back", "crash_back", "dark_back"]})
+    write_r0_source(tmp_path, scene, frame)
+    monkeypatch.setattr(r1_exporter, "R0_REPORT", tmp_path)
+    assert load_r0_rows(scene, False).protocol.astype(str).tolist() == frame.protocol.tolist()
+
+
+def test_load_r0_rows_rejects_missing_protocol(monkeypatch, tmp_path):
+    scene = "missing-protocol"
+    frame = pd.DataFrame({"protocol": ["blur_back", "crash_back"]})
+    write_r0_source(tmp_path, scene, frame)
+    monkeypatch.setattr(r1_exporter, "R0_REPORT", tmp_path)
+    with pytest.raises(RuntimeError, match="R1-F0 R0 protocol rows changed"):
+        load_r0_rows(scene, False)
+
+
+@pytest.mark.parametrize(
+    "marker_overrides",
+    [
+        {"rows": 1},
+        {"complete": False},
+        {"schema_version": 2},
+        {"split": "engineering_smoke"},
+        {"scene_token": "wrong-scene"},
+        {"probe_val_read": True},
+        {"probe_test_read": True},
+    ],
+)
+def test_load_r0_rows_rejects_invalid_empty_scene_marker(
+    monkeypatch, tmp_path, marker_overrides
+):
+    scene = "invalid-empty-scene"
+    write_r0_source(
+        tmp_path, scene, pd.DataFrame(columns=["protocol"]), **marker_overrides
+    )
+    monkeypatch.setattr(r1_exporter, "R0_REPORT", tmp_path)
+    with pytest.raises(RuntimeError, match="R1-F0 invalid R0 source marker"):
+        load_r0_rows(scene, False)
+
+
+@pytest.mark.parametrize("main_rows,r0_count", [(0, 1), (2, 5), (2, 7)])
+def test_r0_p2a_cohort_continuity(main_rows, r0_count):
+    validate_r0_cohort_continuity(
+        pd.DataFrame(index=range(0)), pd.DataFrame(index=range(0))
+    )
+    validate_r0_cohort_continuity(
+        pd.DataFrame(index=range(2)), pd.DataFrame(index=range(6))
+    )
+    with pytest.raises(RuntimeError, match="R1-F0 R0/P2A cohort row count changed"):
+        validate_r0_cohort_continuity(
+            pd.DataFrame(index=range(main_rows)),
+            pd.DataFrame(index=range(r0_count)),
+        )
 
 
 def test_groupkfold_keeps_all_protocol_rows_of_a_scene_together():

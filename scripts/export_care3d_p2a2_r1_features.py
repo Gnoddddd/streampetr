@@ -250,12 +250,32 @@ def load_r0_rows(scene: str, engineering: bool) -> pd.DataFrame:
         directory / f"{scene}.rows.csv", float_precision="round_trip"
     )
     expected_split = "engineering_smoke" if engineering else "probe_train"
-    if set(frame.protocol.astype(str)) != set(PROTOCOLS):
-        raise RuntimeError(f"R1-F0 R0 protocol rows changed: {scene}")
     marker = json.loads((directory / f"{scene}.complete.json").read_text())
-    if marker.get("split") != expected_split or int(marker.get("rows", -1)) != len(frame):
+    if not all((
+        marker.get("complete") is True,
+        marker.get("schema_version") == 1,
+        marker.get("split") == expected_split,
+        marker.get("scene_token") == scene,
+        marker.get("rows") == len(frame),
+        marker.get("probe_val_read") is False,
+        marker.get("probe_test_read") is False,
+    )):
         raise RuntimeError(f"R1-F0 invalid R0 source marker: {scene}")
+    if len(frame) > 0 and set(frame.protocol.astype(str)) != set(PROTOCOLS):
+        raise RuntimeError(f"R1-F0 R0 protocol rows changed: {scene}")
     return frame
+
+
+def validate_r0_cohort_continuity(
+    main_frame: pd.DataFrame,
+    r0_rows: pd.DataFrame,
+) -> None:
+    expected_r0_rows = len(main_frame) * len(PROTOCOLS)
+    if len(r0_rows) != expected_r0_rows:
+        raise RuntimeError(
+            "R1-F0 R0/P2A cohort row count changed: "
+            f"expected={expected_r0_rows}, observed={len(r0_rows)}"
+        )
 
 
 def update_progress() -> None:
@@ -359,6 +379,7 @@ def main() -> None:
         if "gt_used_as_input" not in main_frame or main_frame.gt_used_as_input.astype(bool).any():
             raise RuntimeError("R1-F0 frozen online-anchor metadata indicates GT input")
         r0_rows = load_r0_rows(scene, args.engineering_scene)
+        validate_r0_cohort_continuity(main_frame, r0_rows)
         clean_state = initial
         anchor = None
         output_rows = []
