@@ -7,8 +7,13 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
 import torch
 from torch import Tensor
 
-from .base import ObjectEvidenceAdapter
-from ..paired_training import temporary_eval_no_grad
+from .base import ObjectEvidenceAdapter, align_by_object_id
+from ..fault_sampler import PairedFaultSampler
+from ..integrations.fault_images import fault_normalized_images
+from ..observability import camera_support, observability_gap
+from ..paired_training import (
+    ObjectEvidenceObjective, temporary_eval_no_grad, temporary_native_teacher,
+)
 from ..types import ObjectEvidenceBatch
 
 
@@ -184,3 +189,163 @@ class StreamPETRAdapter(ObjectEvidenceAdapter):
             fault_output = forward_frame(fault_frames[-1], True)
             fault_tokens = fault_capture.tensor
         return clean_output, clean_tokens, fault_output, fault_tokens
+
+
+try:  # Registered only inside a StreamPETR/OpenMMLab runtime.
+    from mmdet.models import DETECTORS
+    from projects.mmdet3d_plugin.models.detectors.petr3d import Petr3D
+except (ImportError, ModuleNotFoundError):  # pragma: no cover - dependency-light unit tests
+    DETECTORS = None
+    Petr3D = None
+
+
+if Petr3D is not None:
+    @DETECTORS.register_module()
+    class OEStreamPETR(Petr3D):
+        """Native StreamPETR training integration for R0 and OE modes."""
+
+        def __init__(self, object_evidence=None, **kwargs):
+            config = dict(object_evidence or {})
+            self.object_evidence_enabled = bool(config.pop("enabled", False))
+            self.object_evidence_config = config
+            super().__init__(**kwargs)
+            self._oep_sampler = PairedFaultSampler(
+                seed=int(config.get("seed", 2026)),
+                pair_probability=float(config.get("pair_probability", 0.5)),
+            )
+            self._oep_iteration = 0
+            self._oep_force_paired = False
+            self.object_evidence = ObjectEvidenceObjective(
+                teacher_dim=None,
+                lambda_oe=float(config.get("lambda_oe", 0.5)),
+                lambda_pg=0.0,
+                warmup_iters=int(config.get("auxiliary_warmup_iters", 1000)),
+            ) if self.object_evidence_enabled else None
+
+        def _run_and_capture(self, arguments):
+            adapter = StreamPETRAdapter(self)
+            outputs = []
+            handle = self.pts_bbox_head.register_forward_hook(
+                lambda _module, _inputs, value: outputs.append(value)
+            )
+            try:
+                with adapter.capture() as capture:
+                    losses = super().forward_train(**arguments)
+            finally:
+                handle.remove()
+            if not outputs:
+                raise RuntimeError("native StreamPETR head produced no output")
+            return losses, capture.tensor, outputs[-1]
+
+        @staticmethod
+        def _scene_tokens(img_metas):
+            current = img_metas[-1]
+            return [str(meta.get("scene_token", meta.get("sample_idx", index)))
+                    for index, meta in enumerate(current)]
+
+        @staticmethod
+        def _normalization(img_metas):
+            config = img_metas[-1][0].get("img_norm_cfg", {})
+            return (
+                config.get("mean", [123.675, 116.28, 103.53]),
+                config.get("std", [58.395, 57.12, 57.375]),
+            )
+
+        def forward_train(
+            self, img_metas=None, gt_bboxes_3d=None, gt_labels_3d=None,
+            gt_labels=None, gt_bboxes=None, gt_bboxes_ignore=None,
+            depths=None, centers2d=None, **data,
+        ):
+            if not self.object_evidence_enabled:
+                return super().forward_train(
+                    img_metas=img_metas, gt_bboxes_3d=gt_bboxes_3d,
+                    gt_labels_3d=gt_labels_3d, gt_labels=gt_labels,
+                    gt_bboxes=gt_bboxes, gt_bboxes_ignore=gt_bboxes_ignore,
+                    depths=depths, centers2d=centers2d, **data,
+                )
+            iteration = self._oep_iteration
+            self._oep_iteration += 1
+            paired = self._oep_force_paired or self._oep_sampler.paired_iteration()
+            common = dict(
+                img_metas=img_metas, gt_bboxes_3d=gt_bboxes_3d,
+                gt_labels_3d=gt_labels_3d, gt_labels=gt_labels,
+                gt_bboxes=gt_bboxes, gt_bboxes_ignore=gt_bboxes_ignore,
+                depths=depths, centers2d=centers2d,
+            )
+            clean_arguments = {**common, **data}
+            if not paired:
+                return super().forward_train(**clean_arguments)
+
+            clip_length = int(data["img"].shape[1])
+            episode = self._oep_sampler.sample(clip_length)
+            mean, std = self._normalization(img_metas)
+            fault_image = fault_normalized_images(
+                data["img"], episode, mean, std, self._scene_tokens(img_metas)
+            )
+            fault_arguments = {**common, **data, "img": fault_image}
+            self._object_evidence_last_episode = episode
+            if self.object_evidence.lambda_oe <= 0:
+                return super().forward_train(**fault_arguments)
+
+            adapter = StreamPETRAdapter(self)
+            initial_memory = adapter.snapshot_memory()
+            adapter.restore_memory(initial_memory)
+            with temporary_native_teacher(self):
+                _, clean_tokens, clean_outputs = self._run_and_capture(clean_arguments)
+            adapter.restore_memory(initial_memory)
+            fault_losses, fault_tokens, fault_outputs = self._run_and_capture(fault_arguments)
+
+            current_boxes = gt_bboxes_3d[-1]
+            current_labels = gt_labels_3d[-1]
+            identities = [list(range(len(boxes))) for boxes in current_boxes]
+            clean_evidence = adapter.extract(
+                clean_tokens, clean_outputs, current_boxes, current_labels, identities
+            ).batch
+            fault_evidence = adapter.extract(
+                fault_tokens, fault_outputs, current_boxes, current_labels, identities
+            ).batch
+            clean_evidence, fault_evidence = align_by_object_id(clean_evidence, fault_evidence)
+
+            transforms = data["lidar2img"]
+            if transforms.ndim == 5:
+                transforms = transforms[:, -1]
+            gaps, support_masks = [], []
+            strengths = data["img"].new_zeros(data["img"].shape[0], data["img"].shape[2])
+            strengths[:, episode.spec.camera] = episode.spec.strength
+            for batch_index, boxes in enumerate(current_boxes):
+                box_tensor = _tensor_boxes(boxes, transforms.device)
+                support = camera_support(
+                    box_tensor, transforms[batch_index], data["img"].shape[-2:]
+                )
+                gap, supported = observability_gap(support, strengths[batch_index])
+                gaps.append(gap)
+                support_masks.append(supported)
+            selected_gap, selected_valid = [], []
+            for batch_index, gt_index in zip(
+                clean_evidence.batch_indices.tolist(), clean_evidence.gt_indices.tolist()
+            ):
+                selected_gap.append(gaps[batch_index][gt_index])
+                selected_valid.append(support_masks[batch_index][gt_index])
+            gap_tensor = (
+                torch.stack(selected_gap) if selected_gap
+                else fault_evidence.tokens.new_empty((0,))
+            )
+            valid_mask = (
+                torch.stack(selected_valid).bool() if selected_valid
+                else torch.empty(0, dtype=torch.bool, device=fault_evidence.tokens.device)
+            )
+            valid_mask = valid_mask & clean_evidence.valid_mask & fault_evidence.valid_mask
+            auxiliary = self.object_evidence(
+                clean_evidence.tokens, fault_evidence.tokens, gap_tensor,
+                valid_mask, iteration,
+            )
+            fault_losses["loss_oe"] = auxiliary["loss_object_evidence_total"]
+            fault_losses["oe_value"] = auxiliary["loss_object_evidence"].detach()
+            fault_losses["oe_gap_mean"] = (
+                gap_tensor.mean().detach() if len(gap_tensor) else gap_tensor.new_zeros(())
+            )
+            fault_losses["oe_gap_max"] = (
+                gap_tensor.max().detach() if len(gap_tensor) else gap_tensor.new_zeros(())
+            )
+            fault_losses["oe_matched_objects"] = gap_tensor.new_tensor(len(gap_tensor))
+            return fault_losses

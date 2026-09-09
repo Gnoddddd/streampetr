@@ -1,7 +1,7 @@
 """Architecture-neutral paired objective and exact disabled-path wrapper."""
 
 from contextlib import contextmanager
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Sequence
 
 import torch
 from torch import Tensor, nn
@@ -19,6 +19,39 @@ def temporary_eval_no_grad(module: nn.Module):
         with torch.no_grad():
             yield
     finally:
+        for child, training in states.items():
+            child.training = training
+
+
+@contextmanager
+def temporary_native_teacher(
+    module: nn.Module, train_shaped_modules: Sequence[nn.Module] = ()
+):
+    """Eval/no-grad teacher context which preserves train-shaped detector dispatch.
+
+    Some native detectors use their root ``training`` flag to reshape temporal
+    inputs. The root therefore stays train-shaped while every child executes in
+    eval mode. Forward pre-hooks defend against native code calling ``train()``
+    internally between history frames.
+    """
+    states = {child: child.training for child in module.modules()}
+    handles = []
+    train_shaped = {module, *train_shaped_modules}
+    module.eval()
+    for current in train_shaped:
+        current.training = True
+    for child in list(module.modules())[1:]:
+        if child in train_shaped:
+            continue
+        handles.append(child.register_forward_pre_hook(
+            lambda current, _arguments: setattr(current, "training", False)
+        ))
+    try:
+        with torch.no_grad():
+            yield
+    finally:
+        for handle in handles:
+            handle.remove()
         for child, training in states.items():
             child.training = training
 

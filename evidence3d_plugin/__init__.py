@@ -22,6 +22,7 @@ from models.hard_positive_boundary_head import (  # noqa: F401
 from models.lidar_privileged_target_evidence_head import (  # noqa: F401
     LiDARPrivilegedTargetEvidenceStreamPETRHead,
 )
+from models.object_evidence.adapters.streampetr import OEStreamPETR  # noqa: F401
 
 __all__ = [
     "ApplyPartialObservation",
@@ -34,4 +35,5 @@ __all__ = [
     "LiDARPrivilegedTargetEvidenceStreamPETRHead",
     "LiDARPrivilegedNuScenesDataset",
     "AttachLiDARPointCounts",
+    "OEStreamPETR",
 ]
