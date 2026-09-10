@@ -8,8 +8,9 @@ import torch
 from torch import Tensor
 
 from .base import ObjectEvidenceAdapter, align_by_object_id
-from ..fault_sampler import PairedFaultSampler
-from ..integrations.fault_images import fault_normalized_images
+from ..fault_sampler import FaultEpisode
+from ..integrations.fault_images import stream_fault_images_from_raw
+from ..integrations.sequence_episode import PersistentSequenceFaultState
 from ..observability import camera_support, observability_gap
 from ..paired_training import (
     ObjectEvidenceObjective, temporary_eval_no_grad, temporary_native_teacher,
@@ -21,6 +22,36 @@ MEMORY_NAMES = (
     "memory_embedding", "memory_reference_point", "memory_velo",
     "memory_timestamp", "memory_egopose",
 )
+
+
+def memory_on_device(memory, device):
+    return {
+        name: None if value is None else value.to(device)
+        for name, value in memory.items()
+    }
+
+
+def merge_memory_rows(primary, secondary, use_secondary: Sequence[bool]):
+    """Merge batched temporal memory without changing either source."""
+    merged = {}
+    for name in MEMORY_NAMES:
+        left, right = primary.get(name), secondary.get(name)
+        if left is None or right is None:
+            merged[name] = right if any(use_secondary) else left
+            continue
+        value = left.detach().clone()
+        mask = torch.as_tensor(use_secondary, dtype=torch.bool, device=value.device)
+        value[mask] = right.to(value.device)[mask]
+        merged[name] = value
+    return merged
+
+
+def memory_checksum(memory) -> float:
+    """Small trace-only checksum over all StreamPETR temporal state tensors."""
+    return float(sum(
+        value.detach().double().sum().cpu()
+        for value in memory.values() if value is not None
+    ))
 
 
 def dn_pad_size(outputs: Optional[Dict[str, Any]]) -> int:
@@ -209,12 +240,16 @@ if Petr3D is not None:
             self.object_evidence_enabled = bool(config.pop("enabled", False))
             self.object_evidence_config = config
             super().__init__(**kwargs)
-            self._oep_sampler = PairedFaultSampler(
-                seed=int(config.get("seed", 2026)),
+            self._oep_sequences = PersistentSequenceFaultState(
+                base_seed=int(config.get("seed", 2026)),
                 pair_probability=float(config.get("pair_probability", 0.5)),
+                onset_frames=int(config.get("onset_frames", 2)),
             )
             self._oep_iteration = 0
             self._oep_force_paired = False
+            self._oep_force_fault_sequence = False
+            self._oep_clean_shadow_memory = None
+            self._oep_pending_student_memory = None
             self.object_evidence = ObjectEvidenceObjective(
                 teacher_dim=None,
                 lambda_oe=float(config.get("lambda_oe", 0.5)),
@@ -244,12 +279,33 @@ if Petr3D is not None:
                     for index, meta in enumerate(current)]
 
         @staticmethod
-        def _normalization(img_metas):
-            config = img_metas[-1][0].get("img_norm_cfg", {})
-            return (
-                config.get("mean", [123.675, 116.28, 103.53]),
-                config.get("std", [58.395, 57.12, 57.375]),
+        def _sample_tokens(img_metas):
+            current = img_metas[-1]
+            return [str(meta.get("sample_idx", f"sample:{index}"))
+                    for index, meta in enumerate(current)]
+
+        @staticmethod
+        def _prev_exists(data):
+            values = data["prev_exists"]
+            if values.ndim > 1:
+                values = values[:, -1]
+            return [bool(value) for value in values.detach().cpu().flatten()]
+
+        def get_extra_state(self):
+            adapter = StreamPETRAdapter(self)
+            student = adapter.snapshot_memory()
+            return dict(
+                iteration=self._oep_iteration,
+                sequences=self._oep_sequences.state_dict(),
+                clean_shadow=self._oep_clean_shadow_memory,
+                student_memory=student,
             )
+
+        def set_extra_state(self, state):
+            self._oep_iteration = int(state.get("iteration", 0))
+            self._oep_sequences.load_state_dict(state["sequences"])
+            self._oep_clean_shadow_memory = state.get("clean_shadow")
+            self._oep_pending_student_memory = state.get("student_memory")
 
         def forward_train(
             self, img_metas=None, gt_bboxes_3d=None, gt_labels_3d=None,
@@ -265,7 +321,6 @@ if Petr3D is not None:
                 )
             iteration = self._oep_iteration
             self._oep_iteration += 1
-            paired = self._oep_force_paired or self._oep_sampler.paired_iteration()
             common = dict(
                 img_metas=img_metas, gt_bboxes_3d=gt_bboxes_3d,
                 gt_labels_3d=gt_labels_3d, gt_labels=gt_labels,
@@ -273,27 +328,55 @@ if Petr3D is not None:
                 depths=depths, centers2d=centers2d,
             )
             clean_arguments = {**common, **data}
-            if not paired:
-                return super().forward_train(**clean_arguments)
-
-            clip_length = int(data["img"].shape[1])
-            episode = self._oep_sampler.sample(clip_length)
-            mean, std = self._normalization(img_metas)
-            fault_image = fault_normalized_images(
-                data["img"], episode, mean, std, self._scene_tokens(img_metas)
+            adapter = StreamPETRAdapter(self)
+            if self._oep_pending_student_memory is not None:
+                adapter.restore_memory(memory_on_device(
+                    self._oep_pending_student_memory, data["img"].device
+                ))
+                self._oep_pending_student_memory = None
+            student_before = adapter.snapshot_memory()
+            decisions = self._oep_sequences.advance_batch(
+                self._scene_tokens(img_metas), self._sample_tokens(img_metas),
+                self._prev_exists(data),
+                force_fault=self._oep_force_paired or self._oep_force_fault_sequence,
+                force_active=self._oep_force_paired,
             )
+            self._object_evidence_last_decisions = decisions
+            reset_rows = [decision.sequence_start for decision in decisions]
+            if self._oep_clean_shadow_memory is None:
+                self._oep_clean_shadow_memory = student_before
+            elif any(reset_rows):
+                self._oep_clean_shadow_memory = merge_memory_rows(
+                    memory_on_device(self._oep_clean_shadow_memory, data["img"].device),
+                    student_before, reset_rows,
+                )
+            active_rows = [decision.fault_active for decision in decisions]
+            if not any(active_rows):
+                losses = super().forward_train(**clean_arguments)
+                self._oep_clean_shadow_memory = adapter.snapshot_memory()
+                return losses
+
+            fault_image = stream_fault_images_from_raw(data["img"], img_metas, decisions)
             fault_arguments = {**common, **data, "img": fault_image}
-            self._object_evidence_last_episode = episode
+            first = next(decision for decision in decisions if decision.fault_active)
+            self._object_evidence_last_episode = FaultEpisode(first.fault_spec, (True,))
             if self.object_evidence.lambda_oe <= 0:
                 return super().forward_train(**fault_arguments)
 
-            adapter = StreamPETRAdapter(self)
-            initial_memory = adapter.snapshot_memory()
-            adapter.restore_memory(initial_memory)
+            student_history = adapter.snapshot_memory()
+            adapter.restore_memory(memory_on_device(
+                self._oep_clean_shadow_memory, data["img"].device
+            ))
             with temporary_native_teacher(self):
                 _, clean_tokens, clean_outputs = self._run_and_capture(clean_arguments)
-            adapter.restore_memory(initial_memory)
+            clean_shadow_after = adapter.snapshot_memory()
+            adapter.restore_memory(student_history)
             fault_losses, fault_tokens, fault_outputs = self._run_and_capture(fault_arguments)
+            student_after = adapter.snapshot_memory()
+            self._oep_clean_shadow_memory = merge_memory_rows(
+                clean_shadow_after, student_after,
+                [not active for active in active_rows],
+            )
 
             current_boxes = gt_bboxes_3d[-1]
             current_labels = gt_labels_3d[-1]
@@ -311,7 +394,11 @@ if Petr3D is not None:
                 transforms = transforms[:, -1]
             gaps, support_masks = [], []
             strengths = data["img"].new_zeros(data["img"].shape[0], data["img"].shape[2])
-            strengths[:, episode.spec.camera] = episode.spec.strength
+            for batch_index, decision in enumerate(decisions):
+                if decision.fault_active:
+                    strengths[batch_index, decision.fault_spec.camera] = (
+                        decision.fault_spec.strength
+                    )
             for batch_index, boxes in enumerate(current_boxes):
                 box_tensor = _tensor_boxes(boxes, transforms.device)
                 support = camera_support(

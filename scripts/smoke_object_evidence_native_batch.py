@@ -37,6 +37,7 @@ def parse_args():
     parser.add_argument("--dataset-index", type=int)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--disabled-equivalence", action="store_true")
+    parser.add_argument("--temporal-continuity", action="store_true")
     return parser.parse_args()
 
 
@@ -221,6 +222,81 @@ def stream_disabled_equivalence(args):
     )
 
 
+def stream_temporal_continuity(args):
+    sys.path.insert(0, str(STREAM))
+    from mmcv import Config
+    from mmcv.parallel import collate, scatter
+    from mmcv.runner import load_checkpoint
+    from mmcv.utils import import_modules_from_strings
+    from mmdet3d.datasets import build_dataset
+    from mmdet3d.models import build_model
+    from models.object_evidence.adapters.streampetr import (
+        StreamPETRAdapter, memory_checksum,
+    )
+
+    config = Config.fromfile(str(ROOT / "configs/object_evidence/streampetr_oe_full.py"))
+    import_modules_from_strings(**config.custom_imports)
+    dataset = build_dataset(config.data.train)
+    starts = [0] + (np.nonzero(dataset.flag[1:] != dataset.flag[:-1])[0] + 1).tolist()
+    candidates = [
+        start for position, start in enumerate(starts[:-1])
+        if starts[position + 1] - start >= 6 and start >= 10
+    ]
+    if not candidates:
+        raise RuntimeError("no six-frame StreamPETR training sequence found")
+    start = candidates[0]
+    next_start = next(value for value in starts if value > start)
+    model = build_model(config.model, train_cfg=config.get("train_cfg"), test_cfg=config.get("test_cfg"))
+    load_checkpoint(model, str(ROOT / config.load_from), map_location="cpu", strict=False)
+    model = model.to(args.device).train()
+    model._oep_force_fault_sequence = True
+    model._oep_iteration = model.object_evidence.warmup_iters
+    device_index = int(args.device.split(":")[-1])
+    trace = []
+
+    def execute(index):
+        seed_all(2026 + index)
+        sample = dataset[index]
+        data = scatter(collate([sample], samples_per_gpu=1), [device_index])[0]
+        prev = bool(data["prev_exists"].detach().cpu().flatten()[-1])
+        with torch.no_grad():
+            model(return_loss=True, **data)
+        decision = model._object_evidence_last_decisions[0]
+        student = StreamPETRAdapter(model).snapshot_memory()
+        shadow = model._oep_clean_shadow_memory
+        item = dict(
+            frame=decision.frame_index, scene_token=decision.scene_token,
+            sample_token=decision.sample_token, prev_exists=prev,
+            sequence_id=decision.sequence_id,
+            clean_or_fault="fault" if decision.fault_active else "clean",
+            fault_camera=decision.fault_spec.camera,
+            fault_type=decision.fault_spec.fault_type,
+            severity=decision.fault_spec.severity,
+            fault_active=decision.fault_active,
+            student_memory_checksum=memory_checksum(student),
+            clean_teacher_memory_checksum=memory_checksum(shadow),
+            memory_max_abs_diff=max_abs_difference(student, shadow),
+        )
+        trace.append(item)
+
+    for index in range(start, start + 6):
+        execute(index)
+    execute(next_start)
+    sequence = trace[:6]
+    specs = {(row["fault_camera"], row["fault_type"], row["severity"]) for row in sequence}
+    if [row["fault_active"] for row in sequence] != [False, False, True, True, True, True]:
+        raise RuntimeError("StreamPETR onset continuity check failed")
+    if len(specs) != 1 or any(row["sequence_id"] != sequence[0]["sequence_id"] for row in sequence):
+        raise RuntimeError("StreamPETR fault spec changed within a sequence")
+    if sequence[0]["memory_max_abs_diff"] != 0 or sequence[1]["memory_max_abs_diff"] != 0:
+        raise RuntimeError("clean shadow diverged before fault onset")
+    if not any(row["memory_max_abs_diff"] > 0 for row in sequence[2:]):
+        raise RuntimeError("teacher/student memories did not diverge after onset")
+    if trace[-1]["frame"] != 0 or trace[-1]["sequence_id"] == sequence[0]["sequence_id"]:
+        raise RuntimeError("StreamPETR sequence reset check failed")
+    return dict(architecture="streampetr", trace=trace)
+
+
 def official_bevdepth_values():
     path = BEVDEPTH / "bevdepth/exps/nuscenes/base_exp.py"
     tree = ast.parse(path.read_text())
@@ -265,6 +341,7 @@ class BEVDepthSmokeOwner(nn.Module):
     def __init__(self, model, values, mode):
         super().__init__()
         self.model = model
+        self.data_root = str(ROOT / "data/nuscenes")
         self.ida_aug_conf = values["ida_aug_conf"]
         self.img_conf = values["img_conf"]
         self.downsample_factor = values["backbone_conf"]["downsample_factor"]
@@ -286,12 +363,13 @@ def bevdepth_smoke(args):
         install_voxel_pooling_fallback, native_paired_step,
     )
     install_voxel_pooling_fallback()
-    from bevdepth.datasets.nusc_det_dataset import NuscDetDataset, collate_fn
+    from bevdepth.datasets.nusc_det_dataset import collate_fn
     from bevdepth.models.base_bev_depth import BaseBEVDepth
+    from datasets.bevdepth_object_evidence import OEPairedNuscDetDataset
     from scripts.export_object_evidence_detector_only import detector_only_state_dict
 
     values = official_bevdepth_values()
-    dataset = NuscDetDataset(
+    dataset = OEPairedNuscDetDataset(
         ida_aug_conf=values["ida_aug_conf"], bda_aug_conf=values["bda_aug_conf"],
         classes=values["CLASSES"], data_root=str(ROOT / "data/nuscenes"),
         info_paths=str(bevdepth_smoke_info()), is_train=True, use_cbgs=False,
@@ -336,6 +414,51 @@ def bevdepth_smoke(args):
         matched_object_count=int(diagnostics["matched_objects"]),
         detector_gradient_norm=gradient, detector_parameter_delta=delta,
         peak_cuda_memory_mb=torch.cuda.max_memory_allocated() / 1024 ** 2,
+    )
+
+
+def bevdepth_temporal_continuity(args):
+    sys.path.insert(0, str(BEVDEPTH))
+    from datasets.bevdepth_object_evidence import OEPairedNuscDetDataset
+    from models.object_evidence.integrations.fault_images import bevdepth_fault_images_from_raw
+    from models.object_evidence.integrations.sequence_episode import deterministic_sample_faults
+
+    values = official_bevdepth_values()
+    dataset = OEPairedNuscDetDataset(
+        ida_aug_conf=values["ida_aug_conf"], bda_aug_conf=values["bda_aug_conf"],
+        classes=values["CLASSES"], data_root=str(ROOT / "data/nuscenes"),
+        info_paths=str(bevdepth_smoke_info()), is_train=True, use_cbgs=False,
+        img_conf=values["img_conf"], num_sweeps=1, sweep_idxes=[], key_idxes=[-1],
+        return_depth=True, use_fusion=False,
+    )
+    index = int(0 if args.dataset_index is None else args.dataset_index) % len(dataset)
+    seed_all()
+    sample = dataset[index]
+    clean, meta = sample[0].unsqueeze(0), [sample[7]]
+    spec = deterministic_sample_faults(2026, [meta[0]["token"]], 0.5, force_fault=True)[0]
+    fault = bevdepth_fault_images_from_raw(
+        clean, meta, [spec], str(ROOT / "data/nuscenes"),
+        values["img_conf"]["img_mean"], values["img_conf"]["img_std"],
+        values["ida_aug_conf"]["cams"], values["img_conf"]["to_rgb"],
+    )
+    rows = []
+    for storage_index, role in enumerate(("current", "previous")):
+        fault_delta = float((fault[0, storage_index, spec.camera] - clean[0, storage_index, spec.camera]).abs().max())
+        healthy = [camera for camera in range(clean.shape[2]) if camera != spec.camera]
+        healthy_delta = float((fault[0, storage_index, healthy] - clean[0, storage_index, healthy]).abs().max())
+        rows.append(dict(
+            storage_index=storage_index, role=role, fault_camera=spec.camera,
+            fault_type=spec.fault_type, severity=spec.severity,
+            fault_active=True, fault_camera_pixel_delta=fault_delta,
+            healthy_camera_pixel_delta=healthy_delta,
+        ))
+    if rows[0]["fault_camera_pixel_delta"] <= 0 or rows[1]["fault_camera_pixel_delta"] <= 0:
+        raise RuntimeError("BEVDepth fault did not affect both key frames")
+    if any(row["healthy_camera_pixel_delta"] != 0 for row in rows):
+        raise RuntimeError(f"BEVDepth persistent fault changed a healthy camera: {rows}")
+    return dict(
+        architecture="bevdepth", sample_token=meta[0]["token"],
+        scene_token=meta[0]["scene_token"], trace=rows,
     )
 
 
@@ -442,7 +565,12 @@ def main():
     args = parse_args()
     if not torch.cuda.is_available():
         raise RuntimeError("native batch smoke requires CUDA")
-    if args.disabled_equivalence:
+    if args.temporal_continuity:
+        result = (
+            stream_temporal_continuity(args) if args.architecture == "streampetr"
+            else bevdepth_temporal_continuity(args)
+        )
+    elif args.disabled_equivalence:
         result = (
             stream_disabled_equivalence(args) if args.architecture == "streampetr"
             else bevdepth_disabled_equivalence(args)

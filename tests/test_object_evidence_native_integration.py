@@ -1,4 +1,5 @@
 from pathlib import Path
+import io
 import runpy
 
 from mmcv import Config
@@ -9,28 +10,39 @@ from torch import nn
 from datasets.corruption import apply_dark
 from models.object_evidence.fault_sampler import FaultEpisode, FaultSpec
 from models.object_evidence.integrations.bevdepth_lightning import (
-    bevdepth_storage_episode, downsample_depth_labels, reshape_depth_prediction,
-    torch_voxel_pooling_train,
+    downsample_depth_labels, reshape_depth_prediction, torch_voxel_pooling_train,
 )
-from models.object_evidence.integrations.fault_images import fault_normalized_images
+from models.object_evidence.integrations.fault_images import (
+    corrupt_raw_images, replay_stream_augmentation,
+)
+from models.object_evidence.integrations.sequence_episode import (
+    PersistentSequenceFaultState, deterministic_sample_faults,
+)
 from models.object_evidence.paired_training import temporary_native_teacher
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_sampled_episode_uses_existing_pixel_corruption_after_onset():
+def test_raw_fault_and_clean_share_exact_augmentation_parameters():
     mean, std = [10, 20, 30], [2, 4, 5]
-    pixels = np.full((4, 5, 3), 100, dtype=np.float32)
-    normalized = torch.from_numpy((pixels - np.asarray(mean)) / np.asarray(std))
-    clean = normalized.permute(2, 0, 1).view(1, 1, 1, 3, 4, 5).expand(1, 2, 6, 3, 4, 5).clone()
-    episode = FaultEpisode(FaultSpec(2, "dark", 0.6), (False, True))
-    fault = fault_normalized_images(clean, episode, mean, std, ["scene"])
-    assert torch.equal(fault[:, 0], clean[:, 0])
-    assert torch.equal(fault[:, 1, [0, 1, 3, 4, 5]], clean[:, 1, [0, 1, 3, 4, 5]])
-    expected_pixels = apply_dark(pixels, 0.6)
-    expected = torch.from_numpy((expected_pixels - np.asarray(mean)) / np.asarray(std)).permute(2, 0, 1)
-    assert torch.allclose(fault[0, 1, 2], expected)
+    pixels = [np.full((4, 5, 3), 80 + index, dtype=np.uint8) for index in range(6)]
+    original = [image.copy() for image in pixels]
+    params = dict(resize=1.0, resize_dims=(5, 4), crop=(0, 0, 5, 4), flip=False, rotate=0.0)
+    clean = replay_stream_augmentation(pixels, params, mean, std, to_rgb=False)
+    episode = FaultEpisode(FaultSpec(2, "dark", 0.6), (True,))
+    fault_raw = corrupt_raw_images(pixels, episode, "scene", (
+        "CAM_FRONT", "CAM_FRONT_RIGHT", "CAM_FRONT_LEFT",
+        "CAM_BACK", "CAM_BACK_LEFT", "CAM_BACK_RIGHT",
+    ))
+    fault = replay_stream_augmentation(fault_raw, params, mean, std, to_rgb=False)
+    assert all(np.array_equal(left, right) for left, right in zip(pixels, original))
+    assert torch.equal(clean[[0, 1, 3, 4, 5]], fault[[0, 1, 3, 4, 5]])
+    expected_raw = list(original)
+    expected_raw[2] = apply_dark(expected_raw[2], 0.6)
+    expected = replay_stream_augmentation(expected_raw, params, mean, std, to_rgb=False)
+    assert torch.equal(fault, expected)
+    assert fault.shape == clean.shape
 
 
 def test_depth_prediction_runtime_reshape_has_explicit_camera_axis():
@@ -38,9 +50,33 @@ def test_depth_prediction_runtime_reshape_has_explicit_camera_axis():
     assert reshape_depth_prediction(value, 2, 6).shape == (2, 6, 8, 3, 4)
 
 
-def test_bevdepth_maps_chronological_onset_to_current_first_storage():
-    episode = FaultEpisode(FaultSpec(1, "crash", 1.0), (False, False, True))
-    assert bevdepth_storage_episode(episode).active == (True, False, False)
+def test_persistent_sequence_samples_once_and_activates_after_two_frames():
+    state = PersistentSequenceFaultState(base_seed=2026, pair_probability=0.5)
+    decisions = []
+    for frame in range(6):
+        decisions.extend(state.advance_batch(
+            ["scene"], [f"sample-{frame}"], [frame > 0], force_fault=frame == 0,
+        ))
+    assert [item.fault_active for item in decisions] == [False, False, True, True, True, True]
+    assert len({item.sequence_id for item in decisions}) == 1
+    assert len({item.fault_spec for item in decisions}) == 1
+
+
+def test_sequence_resume_and_bevdepth_sample_faults_are_deterministic():
+    continuous = PersistentSequenceFaultState(base_seed=9, pair_probability=1.0)
+    expected = [continuous.advance_batch(["s"], [str(i)], [i > 0])[0] for i in range(6)]
+    first = PersistentSequenceFaultState(base_seed=9, pair_probability=1.0)
+    actual = [first.advance_batch(["s"], [str(i)], [i > 0])[0] for i in range(3)]
+    checkpoint = io.BytesIO()
+    torch.save(first.state_dict(), checkpoint)
+    checkpoint.seek(0)
+    resumed = PersistentSequenceFaultState()
+    resumed.load_state_dict(torch.load(checkpoint))
+    actual.extend(resumed.advance_batch(["s"], [str(i)], [True])[0] for i in range(3, 6))
+    assert actual == expected
+    assert deterministic_sample_faults(9, ["token"], 0.5) == deterministic_sample_faults(
+        9, ["token"], 0.5
+    )
 
 
 def test_depth_target_downsampling_matches_runtime_shape():
@@ -75,24 +111,26 @@ def test_native_teacher_stops_bn_updates_and_restores_training_flags():
 
 
 def test_full_stream_configs_share_everything_except_oe_weight(monkeypatch):
-    monkeypatch.setenv("OE_ADAPTATION_MAX_ITERS", "12")
+    monkeypatch.setenv("OE_ADAPTATION_MAX_STEPS", "12")
     r0 = Config.fromfile(str(ROOT / "configs/object_evidence/streampetr_r0_full.py"))
     oe = Config.fromfile(str(ROOT / "configs/object_evidence/streampetr_oe_full.py"))
     assert r0.data.train.ann_file == "data/nuscenes/nuscenes2d_temporal_infos_train.pkl"
     assert r0.load_from == oe.load_from
     assert r0.optimizer == oe.optimizer and r0.runner == oe.runner
+    assert r0.adaptation_max_steps == oe.adaptation_max_steps == 12
+    assert r0.data.train.type == "OEPSequenceNuScenesDataset"
     left, right = dict(r0.model.object_evidence), dict(oe.model.object_evidence)
     assert left.pop("lambda_oe") == 0 and right.pop("lambda_oe") == 0.5
     assert left == right
 
 
 def test_full_bevdepth_configs_share_everything_except_oe_weight(monkeypatch):
-    monkeypatch.setenv("OE_ADAPTATION_MAX_EPOCHS", "3")
+    monkeypatch.setenv("OE_ADAPTATION_MAX_STEPS", "3")
     r0 = runpy.run_path(str(ROOT / "configs/object_evidence/bevdepth_r0_full.py"))
     oe = runpy.run_path(str(ROOT / "configs/object_evidence/bevdepth_oe_full.py"))
     assert r0["train_info"] == "data/nuscenes/nuscenes_infos_train.pkl"
     assert r0["pretrained_checkpoint"] == oe["pretrained_checkpoint"]
-    assert r0["adaptation_max_epochs"] == oe["adaptation_max_epochs"] == 3
+    assert r0["adaptation_max_steps"] == oe["adaptation_max_steps"] == 3
     left, right = dict(r0["object_evidence"]), dict(oe["object_evidence"])
     assert left.pop("lambda_oe") == 0 and right.pop("lambda_oe") == 0.5
     assert left == right

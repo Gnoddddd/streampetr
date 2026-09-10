@@ -13,6 +13,10 @@ from datasets.lidar_privileged_target import (  # noqa: F401
     LiDARPrivilegedNuScenesDataset,
 )
 from datasets.nuscenes_wrapper import EvidenceNuScenesDataset  # noqa: F401
+from datasets.object_evidence_paired import (  # noqa: F401
+    OEPRecordResizeCropFlipRotImage,
+    OEPSequenceNuScenesDataset,
+)
 from hooks.evidence_trace_hook import EvidenceTraceHook  # noqa: F401
 from models.streampetr_adapter import EvidenceConservingStreamPETRHead  # noqa: F401
 from models.feq_head import FEQStreamPETRHead  # noqa: F401
@@ -36,4 +40,6 @@ __all__ = [
     "LiDARPrivilegedNuScenesDataset",
     "AttachLiDARPointCounts",
     "OEStreamPETR",
+    "OEPRecordResizeCropFlipRotImage",
+    "OEPSequenceNuScenesDataset",
 ]

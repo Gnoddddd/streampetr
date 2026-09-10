@@ -8,7 +8,7 @@ pretrained_checkpoint = (
     "checkpoints/official/bev_depth_lss_r50_256x704_128x128_24e_2key.pth"
 )
 batch_size_per_device = 1
-adaptation_max_epochs = int(os.environ.get("OE_ADAPTATION_MAX_EPOCHS", "0"))
+adaptation_max_steps = int(os.environ.get("OE_ADAPTATION_MAX_STEPS", "0"))
 
 object_evidence = dict(
     enabled=True,

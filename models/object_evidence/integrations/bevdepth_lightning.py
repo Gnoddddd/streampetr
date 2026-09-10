@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import runpy
+from functools import partial
 from typing import Dict, Sequence
 
 import torch
@@ -12,10 +13,11 @@ from torch import Tensor, nn
 
 from ..adapters.base import align_by_object_id
 from ..adapters.bevdepth import BEVDepthAdapter, camera_reliability, weighted_depth_loss
-from ..fault_sampler import FaultEpisode, PairedFaultSampler
+from ..fault_sampler import FaultEpisode
 from ..observability import camera_support, observability_gap
 from ..paired_training import ObjectEvidenceObjective, temporary_native_teacher
-from .fault_images import fault_normalized_images
+from .fault_images import bevdepth_fault_images_from_raw
+from .sequence_episode import deterministic_sample_faults
 
 
 def torch_voxel_pooling_train(
@@ -58,11 +60,6 @@ def install_voxel_pooling_fallback() -> bool:
         return False
     base_lss_fpn.voxel_pooling_train = torch_voxel_pooling_train
     return True
-
-
-def bevdepth_storage_episode(episode: FaultEpisode) -> FaultEpisode:
-    """Map chronological sampler state to BEVDepth's current-first tensor layout."""
-    return FaultEpisode(episode.spec, tuple(reversed(episode.active)))
 
 
 def reshape_depth_prediction(prediction: Tensor, batch_size: int, num_cameras: int) -> Tensor:
@@ -125,11 +122,8 @@ def bev_lidar_to_image(mats: Dict[str, Tensor]) -> Tensor:
 
 def initialize_native_state(owner, config: Dict) -> None:
     owner.object_evidence_enabled = bool(config.get("enabled", True))
-    owner._oep_sampler = PairedFaultSampler(
-        seed=int(config.get("seed", 2026)),
-        num_cameras=6,
-        pair_probability=float(config.get("pair_probability", 0.5)),
-    )
+    owner._oep_seed = int(config.get("seed", 2026))
+    owner._oep_pair_probability = float(config.get("pair_probability", 0.5))
     owner._oep_force_paired = False
     owner._oep_iteration = 0
     owner.object_evidence = ObjectEvidenceObjective(
@@ -140,21 +134,24 @@ def initialize_native_state(owner, config: Dict) -> None:
     ) if owner.object_evidence_enabled else None
 
 
-def native_paired_step(owner, batch):
+def native_paired_step(owner, batch, fault_specs=None):
     """Execute one BEVDepth paired-fault R0/OE native training step."""
     sweep_imgs, mats, timestamps, img_metas, gt_boxes, gt_labels, depth_labels = batch
     batch_size, clip_length, num_cameras = sweep_imgs.shape[:3]
     if num_cameras != len(owner.ida_aug_conf["cams"]):
         raise ValueError("runtime camera count disagrees with BEVDepth camera configuration")
-    episode = owner._oep_sampler.sample(clip_length)
-    scene_tokens = [str(meta.get("scene_token", meta.get("token", index)))
-                    for index, meta in enumerate(img_metas)]
-    # BEVDepth stores the current/key frame first, followed by past key frames;
-    # the sampler's active mask is chronological (oldest -> current).
-    storage_episode = bevdepth_storage_episode(episode)
-    fault_images = fault_normalized_images(
-        sweep_imgs, storage_episode, owner.img_conf["img_mean"], owner.img_conf["img_std"],
-        scene_tokens, camera_names=owner.ida_aug_conf["cams"],
+    sample_tokens = [str(meta.get("token", index)) for index, meta in enumerate(img_metas)]
+    if fault_specs is None:
+        fault_specs = deterministic_sample_faults(
+            owner._oep_seed, sample_tokens, owner._oep_pair_probability,
+            num_cameras=num_cameras, force_fault=owner._oep_force_paired,
+        )
+    if len(fault_specs) != batch_size or not any(spec is not None for spec in fault_specs):
+        raise ValueError("native paired step requires at least one batch fault")
+    fault_images = bevdepth_fault_images_from_raw(
+        sweep_imgs, img_metas, fault_specs, owner.data_root,
+        owner.img_conf["img_mean"], owner.img_conf["img_std"],
+        owner.ida_aug_conf["cams"], owner.img_conf.get("to_rgb", True),
     )
     adapter = BEVDepthAdapter(owner.model)
     clean_feature = None
@@ -171,9 +168,12 @@ def native_paired_step(owner, batch):
     fault_feature = capture.tensor
     targets = owner.model.get_targets(gt_boxes, gt_labels)
     detection_loss = owner.model.loss(targets, predictions)
-    reliability = camera_reliability(
-        num_cameras, episode.spec.camera, episode.spec.fault_type, episode.spec.severity
-    ).to(sweep_imgs).expand(batch_size, -1)
+    reliability = sweep_imgs.new_ones(batch_size, num_cameras)
+    for batch_index, spec in enumerate(fault_specs):
+        if spec is not None:
+            reliability[batch_index] = camera_reliability(
+                num_cameras, spec.camera, spec.fault_type, spec.severity
+            ).to(sweep_imgs)
     depth_loss = native_weighted_depth_loss(owner, depth_labels, depth_prediction, reliability)
     oe_loss = detection_loss * 0
     gap_tensor = detection_loss.new_empty((0,))
@@ -185,7 +185,9 @@ def native_paired_step(owner, batch):
         clean_evidence, fault_evidence = align_by_object_id(clean_evidence, fault_evidence)
         projections = bev_lidar_to_image(mats)
         strengths = sweep_imgs.new_zeros(batch_size, num_cameras)
-        strengths[:, episode.spec.camera] = episode.spec.strength
+        for batch_index, spec in enumerate(fault_specs):
+            if spec is not None:
+                strengths[batch_index, spec.camera] = spec.strength
         all_gaps, all_supported = [], []
         for batch_index, boxes in enumerate(gt_boxes):
             support = camera_support(
@@ -219,10 +221,13 @@ def native_paired_step(owner, batch):
     total = detection_loss + depth_loss + oe_loss
     diagnostics = dict(
         detection_loss=detection_loss.detach(), depth_loss=depth_loss.detach(),
-        oe_loss=raw_oe, total_loss=total.detach(), episode=episode,
+        oe_loss=raw_oe, total_loss=total.detach(),
         gap_mean=gap_tensor.mean().detach() if len(gap_tensor) else total.detach() * 0,
         gap_max=gap_tensor.max().detach() if len(gap_tensor) else total.detach() * 0,
         matched_objects=matched,
+        fault_specs=fault_specs,
+        episode=FaultEpisode(next(spec for spec in fault_specs if spec is not None),
+                             tuple(True for _ in range(clip_length))),
     )
     owner._object_evidence_last = diagnostics
     return total
@@ -256,14 +261,41 @@ if BEVDepthLightningModel is not None:
         def training_step(self, batch, batch_idx):
             if not self.object_evidence_enabled:
                 return super().training_step(batch)
-            paired = self._oep_force_paired or self._oep_sampler.paired_iteration()
-            if not paired:
+            tokens = [str(meta.get("token", index)) for index, meta in enumerate(batch[3])]
+            fault_specs = deterministic_sample_faults(
+                self._oep_seed, tokens, self._oep_pair_probability,
+                num_cameras=batch[0].shape[2], force_fault=self._oep_force_paired,
+            )
+            if not any(spec is not None for spec in fault_specs):
                 self._oep_iteration += 1
                 return super().training_step(batch)
-            loss = native_paired_step(self, batch)
+            loss = native_paired_step(self, batch, fault_specs)
             for name in ("detection_loss", "depth_loss", "oe_loss", "total_loss"):
                 self.log(name, self._object_evidence_last[name])
             return loss
+
+        def train_dataloader(self):
+            from datasets.bevdepth_object_evidence import OEPairedNuscDetDataset
+            from bevdepth.datasets.nusc_det_dataset import collate_fn
+
+            dataset = OEPairedNuscDetDataset(
+                ida_aug_conf=self.ida_aug_conf, bda_aug_conf=self.bda_aug_conf,
+                classes=self.class_names, data_root=self.data_root,
+                info_paths=self.train_info_paths, is_train=True,
+                use_cbgs=self.data_use_cbgs, img_conf=self.img_conf,
+                num_sweeps=self.num_sweeps, sweep_idxes=self.sweep_idxes,
+                key_idxes=self.key_idxes, return_depth=self.data_return_depth,
+                use_fusion=self.use_fusion,
+            )
+            return torch.utils.data.DataLoader(
+                dataset, batch_size=self.batch_size_per_device, num_workers=4,
+                drop_last=True, shuffle=False,
+                collate_fn=partial(
+                    collate_fn,
+                    is_return_depth=self.data_return_depth or self.use_fusion,
+                ),
+                sampler=None,
+            )
 
 
 def main():  # pragma: no cover - requires the official BEVDepth Lightning environment
@@ -283,7 +315,7 @@ def main():  # pragma: no cover - requires the official BEVDepth Lightning envir
     )
     checkpoint = torch.load(args.ckpt_path, map_location="cpu")
     model.load_state_dict(checkpoint.get("state_dict", checkpoint), strict=False)
-    trainer = pl.Trainer(max_epochs=int(config["adaptation_max_epochs"]), gpus=1)
+    trainer = pl.Trainer(max_steps=int(config["adaptation_max_steps"]), gpus=1)
     trainer.fit(model)
 
 
