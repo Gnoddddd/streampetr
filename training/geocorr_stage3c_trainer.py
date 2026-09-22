@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import random
 import time
 from copy import deepcopy
 from dataclasses import asdict, dataclass
@@ -25,6 +26,7 @@ from models.geocorr_recovery import (
     GeoCorrStage3BRecovery,
     ObjectCentricCorrelationField,
     correspondence_distillation,
+    masked_softmax,
     recovery_feature_loss,
 )
 
@@ -129,6 +131,77 @@ class GeoCorrStage3CModel(nn.Module):
         )
         return Stage3CForward(recovery, loss_corr, loss_rec, corr_diagnostics)
 
+
+    def inference_forward(
+        self,
+        current_dirty_tokens: Tensor,
+        history_clean_tokens: Tensor,
+        current_valid_mask: Tensor,
+        history_valid_mask: Tensor,
+        current_dirty_fpn: Tensor,
+        projected_center_coords: Tensor,
+        projected_center_valid: Tensor,
+        object_valid_mask: Optional[Tensor] = None,
+    ) -> GeoCorrStage3BOutput:
+        """Recover a dirty current FPN without reading a clean current frame.
+
+        Training uses the clean current branch only as a teacher for L_corr/L_rec.
+        Formal fault inference must be deployable, so this path constructs only the
+        student correspondence from current dirty descriptors and previous clean
+        history. No clean-current tensor is accepted by the signature.
+        """
+        if current_dirty_tokens.ndim != 5 or history_clean_tokens.ndim != 6:
+            raise ValueError("current/history tokens must be 5D/6D")
+        if history_clean_tokens.shape[3] != 1:
+            raise ValueError("GeoCorr V1 inference supports exactly one history frame")
+        if current_valid_mask.shape != current_dirty_tokens.shape[:-1]:
+            raise ValueError("current_valid_mask shape does not match dirty tokens")
+        if history_valid_mask.shape != history_clean_tokens.shape[:-1]:
+            raise ValueError("history_valid_mask shape does not match history tokens")
+        if current_dirty_tokens.shape[:3] != history_clean_tokens.shape[:3]:
+            raise ValueError("current/history B,N,J dimensions must match")
+
+        center = self.correlation.center_candidate_index
+        dirty_query = current_dirty_tokens[:, :, center].detach()
+        history_key = history_clean_tokens.detach()
+        q_dirty = self.correlation.adapter(dirty_query)
+        history_descriptor = torch.nn.functional.normalize(history_key, dim=-1)
+        student_logits = torch.einsum(
+            "bnvc,bnjtwc->bnvjtw", q_dirty, history_descriptor
+        )
+        if self.correlation.geometry_prior_beta:
+            prior = (
+                -self.correlation.geometry_prior_beta
+                * self.correlation.candidate_offsets.square().sum(-1)
+            )
+            student_logits = student_logits + prior.to(student_logits).reshape(
+                1, 1, 1, -1, 1, 1
+            )
+
+        query_valid = current_valid_mask[:, :, center]
+        if object_valid_mask is not None:
+            if object_valid_mask.shape != query_valid.shape[:2]:
+                raise ValueError("object_valid_mask must have shape [B,N]")
+            query_valid = query_valid & object_valid_mask[:, :, None]
+        valid_mask = (
+            query_valid[:, :, :, None, None, None]
+            & history_valid_mask[:, :, None]
+        )
+        p_student, _ = masked_softmax(
+            student_logits, valid_mask, self.config.temperature
+        )
+        return self.recovery(
+            q_dirty=q_dirty,
+            q_clean=q_dirty.detach(),
+            historical_features=history_descriptor,
+            p_student=p_student,
+            correspondence_valid_mask=valid_mask,
+            p_teacher=None,
+            current_clean_fpn=None,
+            current_dirty_fpn=current_dirty_fpn.detach(),
+            projected_center_coords=projected_center_coords,
+            projected_center_valid=projected_center_valid,
+        )
 
 def freeze_detector(detector: nn.Module) -> None:
     """Freeze every detector parameter without disabling downstream autograd."""
@@ -421,6 +494,24 @@ def load_checkpoint(
     )
 
 
+def epoch_permutation(
+    length: int, seed: int, epoch: int, shuffle: bool = True
+) -> List[int]:
+    """Return the reproducible per-epoch manifest permutation.
+
+    Resume stores the cursor within this order. Rebuilding the order from
+    seed + epoch restores the exact remaining suffix without serializing a
+    large permutation into every checkpoint.
+    """
+    if length < 0:
+        raise ValueError("length must be non-negative")
+    if epoch < 0:
+        raise ValueError("epoch must be non-negative")
+    order = list(range(length))
+    if shuffle:
+        random.Random(int(seed) + int(epoch)).shuffle(order)
+    return order
+
 def limit_pairs(records: Sequence[Any], max_pairs: Optional[int]) -> List[Any]:
     if max_pairs is not None and max_pairs <= 0:
         raise ValueError("max_pairs must be positive")
@@ -664,7 +755,7 @@ __all__ = [
     "assert_finite_parameters", "assert_finite_tensor", "build_optimizer",
     "compose_losses", "forward_diagnostics", "freeze_detector",
     "frozen_detector_parameter_checksum", "gpu_memory_megabytes",
-    "limit_pairs", "load_checkpoint", "module_grad_norm", "now",
+    "epoch_permutation", "limit_pairs", "load_checkpoint", "module_grad_norm", "now",
     "parameter_report", "parameter_update_norm", "reached_max_steps",
     "reduce_official_detection_losses", "save_checkpoint",
     "snapshot_parameters", "streampetr_detection_losses",
