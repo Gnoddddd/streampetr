@@ -47,6 +47,7 @@ from training.geocorr_stage3c_trainer import (  # noqa: E402
     freeze_detector,
     frozen_detector_parameter_checksum,
     gpu_memory_megabytes,
+    epoch_permutation,
     limit_pairs,
     load_checkpoint,
     module_grad_norm,
@@ -101,6 +102,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--log-interval", type=int, default=1)
     parser.add_argument("--save-interval", type=int, default=10)
     parser.add_argument("--seed", type=int, default=2026)
+    shuffle_group = parser.add_mutually_exclusive_group()
+    shuffle_group.add_argument("--shuffle", dest="shuffle", action="store_true")
+    shuffle_group.add_argument("--no-shuffle", dest="shuffle", action="store_false")
+    parser.set_defaults(shuffle=True)
     parser.add_argument("--resume")
     parser.add_argument("--temperature", type=float, default=0.1)
     parser.add_argument("--zero-gradient-patience", type=int, default=10)
@@ -416,13 +421,15 @@ def run(args: argparse.Namespace) -> None:
     accumulated = 0
     resume_epoch, resume_pair = start_epoch, start_pair
     for epoch in range(start_epoch, args.epochs):
+        order = epoch_permutation(len(records), args.seed, epoch, args.shuffle)
         first_pair = start_pair if epoch == start_epoch else 0
-        for pair_index in range(first_pair, len(records)):
+        for pair_position in range(first_pair, len(order)):
             if reached_max_steps(step, args.max_steps):
                 stop = True
                 break
             started = now()
-            record = records[pair_index]
+            record_index = order[pair_position]
+            record = records[record_index]
             previous_index, current_index, previous, clean, dirty = _paired_batches(
                 record, dataset, token_index, paths["nuscenes"], paths["dirty"], device
             )
@@ -446,7 +453,7 @@ def run(args: argparse.Namespace) -> None:
             (losses.total / args.grad_accum).backward()
             assert_finite_gradients(model, "GeoCorr")
             accumulated += 1
-            do_update = accumulated == args.grad_accum or pair_index + 1 == len(records)
+            do_update = accumulated == args.grad_accum or pair_position + 1 == len(order)
             if not do_update:
                 continue
             descriptor_before = snapshot_parameters(model.correlation.adapter)
@@ -468,15 +475,18 @@ def run(args: argparse.Namespace) -> None:
             optimizer.zero_grad()
             accumulated = 0
             step += 1
-            resume_epoch, resume_pair = epoch, pair_index + 1
-            if resume_pair == len(records):
+            resume_epoch, resume_pair = epoch, pair_position + 1
+            if resume_pair == len(order):
                 resume_epoch, resume_pair = epoch + 1, 0
             diagnostics = forward_diagnostics(output)
             last_layer = model.recovery.recovery.layers[-1]
             log = {
                 "step": step,
                 "epoch": epoch,
-                "pair_index": pair_index,
+                "pair_index": pair_position,
+                "manifest_index": record_index,
+                "shuffle": bool(args.shuffle),
+                "shuffle_seed": int(args.seed),
                 "sample_token": record["current_sample_token"],
                 "loss_total": float(losses.total.detach().item()),
                 "loss_det": float(losses.detection.detach().item()),
